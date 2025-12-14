@@ -1,0 +1,37 @@
+{
+  "name": "ghgrab",
+  "version": "0.1.0",
+  "description": "A terminal-based tool for downloading specific files and folders from GitHub repositories",
+  "bin": {
+    "ghgrab": "./bin/ghgrab.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "keywords": [
+    "github",
+    "download",
+    "cli",
+    "tui",
+    "terminal"
+  ],
+  "author": "Abhinav A",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abhixdd/ghgrab.git"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "files": [
+    "bin",
+    "scripts"
+  ]
+}

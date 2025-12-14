@@ -1,0 +1,21 @@
+[package]
+name = "ghgrab"
+version = "0.1.0"
+edition = "2024"
+authors = ["abhixdd"]
+description = "A TUI-based tool to download specific files or folders from GitHub repositories"
+license = "MIT"
+repository = "https://github.com/abhixdd/ghgrab"
+keywords = ["github", "downloader", "tui", "rust", "cli"]
+categories = ["command-line-utilities", "network-programming"]
+
+[dependencies]
+tokio = { version = "1.35", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ratatui = "0.25"
+crossterm = "0.27"
+url = "2.5"
+anyhow = "1.0"
+dirs = "6.0.0"
