@@ -8,6 +8,14 @@ Cargo.lock
 node_modules/
 package-lock.json
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+*.egg-info/
+
 # Binaries
 /bin/*.exe
 /bin/ghgrab

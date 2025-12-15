@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghgrab"
+version = "0.1.0"
+description = "Download specific files and folders from GitHub repositories without cloning"
+authors = [{name = "Abhinav A", email = "your-email@example.com"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.7"
+keywords = ["github", "download", "cli", "tui"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/abhixdd/ghgrab"
+Repository = "https://github.com/abhixdd/ghgrab"
+
+[project.scripts]
+ghgrab = "ghgrab:main"
