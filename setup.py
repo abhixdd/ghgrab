@@ -6,6 +6,8 @@ import sys
 import urllib.request
 import platform
 from pathlib import Path
+import hashlib
+import json
 
 VERSION = "1.0.1"
 
@@ -47,6 +49,22 @@ def download_binary():
             bin_path.unlink(missing_ok=True)
             print(f"Downloaded file too small ({size} bytes). Skipping.")
             return
+
+        checksum_file = Path(__file__).parent / "checksums.json"
+        if checksum_file.exists():
+            with open(checksum_file, "r") as f:
+                checksums = json.load(f)
+            expected_hash = checksums.get(remote_name)
+            if expected_hash:
+                sha256_hash = hashlib.sha256()
+                with open(bin_path, "rb") as f:
+                    for byte_block in iter(lambda: f.read(4096), b""):
+                        sha256_hash.update(byte_block)
+                actual_hash = sha256_hash.hexdigest()
+                if actual_hash != expected_hash:
+                    bin_path.unlink(missing_ok=True)
+                    raise ValueError(f"Checksum mismatch for {remote_name}. Expected {expected_hash}, got {actual_hash}.")
+                print(f"✓ Checksum verified for {remote_name}")
 
         if platform.system().lower() != "windows":
             bin_path.chmod(0o755)

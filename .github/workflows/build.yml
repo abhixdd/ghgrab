@@ -91,10 +91,33 @@ jobs:
       - name: List binaries
         run: ls -lh ./binaries/
 
+      - name: Generate Checksums
+        run: |
+          python -c "
+          import os, hashlib, json
+          res = {}
+          for f in os.listdir('binaries'):
+              path = os.path.join('binaries', f)
+              if os.path.isfile(path):
+                  with open(path, 'rb') as fp:
+                      res[f] = hashlib.sha256(fp.read()).hexdigest()
+          with open('checksums.json', 'w') as out:
+              json.dump(res, out, indent=2)
+          "
+          cat checksums.json
+
+      - name: Upload Checksums Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: checksums.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: binaries/*
+          files: |
+            binaries/*
+            checksums.json
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -118,6 +141,11 @@ jobs:
       - name: Update npm
         run: npm install -g npm@latest
 
+      - name: Download Checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
+
       - name: Publish to npm
         run: npm publish --provenance --access public
 
@@ -135,6 +163,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
+      - name: Download Checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
 
       - name: Build sdist
         run: |

@@ -2,6 +2,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const crypto = require('crypto');
 
 const version = require('../package.json').version;
 const binDir = path.join(__dirname, '..', 'bin');
@@ -74,6 +75,22 @@ async function install() {
         const stat = fs.statSync(binPath);
         if (stat.size < 100000) {
             throw new Error(`Downloaded file is too small (${stat.size} bytes) — likely not a valid binary`);
+        }
+
+        const checksumFile = path.join(__dirname, '..', 'checksums.json');
+        if (fs.existsSync(checksumFile)) {
+            const checksums = JSON.parse(fs.readFileSync(checksumFile, 'utf8'));
+            const expectedHash = checksums[binaryName];
+            if (expectedHash) {
+                const fileBuffer = fs.readFileSync(binPath);
+                const hashSum = crypto.createHash('sha256');
+                hashSum.update(fileBuffer);
+                const actualHash = hashSum.digest('hex');
+                if (actualHash !== expectedHash) {
+                    throw new Error(`Checksum mismatch for ${binaryName}. Expected ${expectedHash}, got ${actualHash}.`);
+                }
+                console.log(`✓ Checksum verified for ${binaryName}`);
+            }
         }
 
         if (process.platform !== 'win32') {
