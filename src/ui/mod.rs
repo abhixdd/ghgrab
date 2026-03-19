@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::github::{GitHubClient, GitHubError, GitHubUrl, RepoItem};
+use ratatui_image::picker::Picker;
 
 pub mod components;
 pub mod theme;
@@ -30,6 +31,7 @@ pub enum AppMode {
     Input,
     Searching,
     Browse,
+    Preview,
 }
 
 pub struct AppState {
@@ -55,6 +57,11 @@ pub struct AppState {
     pub is_searching: bool,
     pub search_query: String,
     pub selected_paths: HashSet<String>,
+    pub preview_content: String,
+    pub preview_path: String,
+    pub preview_loading: bool,
+    pub preview_image: Option<image::DynamicImage>,
+    pub picker: Option<Picker>,
 }
 
 impl Default for AppState {
@@ -88,6 +95,11 @@ impl AppState {
             is_searching: false,
             search_query: String::new(),
             selected_paths: HashSet::new(),
+            preview_content: String::new(),
+            preview_path: String::new(),
+            preview_loading: false,
+            preview_image: None,
+            picker: None,
         }
     }
 
@@ -229,6 +241,10 @@ pub async fn run_tui(
     state_init.download_path = download_path;
     state_init.cwd = cwd;
     state_init.no_folder = no_folder;
+    
+    // Initialize Picker
+    state_init.picker = Some(Picker::new((8, 12))); // Safe fallback for cell size
+    
     let has_initial_url = initial_url.is_some();
 
     if let Some(url) = initial_url {
@@ -332,6 +348,17 @@ async fn event_loop(
                             search_query: &state_lock.search_query,
                         };
                         components::browser::render(f, size, &browser_state);
+                    }
+                    AppMode::Preview => {
+                        let s = &mut *state_lock;
+                        let preview_state = components::preview::PreviewState {
+                            content: &s.preview_content,
+                            path: &s.preview_path,
+                            loading: s.preview_loading,
+                            image: s.preview_image.as_ref(),
+                            picker: s.picker.as_mut(),
+                        };
+                        components::preview::render(f, size, preview_state);
                     }
                 }
 
@@ -600,6 +627,71 @@ async fn handle_input(
                         s.mode = AppMode::Input;
                     }
                 }
+
+                KeyCode::Char('p') | KeyCode::Char('P') if !s.is_searching => {
+                    let items = s.get_view_items();
+                    if let Some(item) = items.get(s.cursor).cloned() {
+                        if item.is_file() {
+                            if let Some(download_url) = item.actual_download_url() {
+                                s.mode = AppMode::Preview;
+                                s.preview_path = item.path.clone();
+                                s.preview_content = String::new();
+                                s.preview_image = None;
+                                s.preview_loading = true;
+
+                                let url = download_url.clone();
+                                let state_c = state.clone();
+                                let client_c = client.clone();
+                                let item_path = item.path.clone();
+
+                                tokio::spawn(async move {
+                                    if is_media_file(&item_path) {
+                                        match client_c.fetch_bytes(&url).await {
+                                            Ok(data) => {
+                                                if let Ok(img) = image::load_from_memory(&data) {
+                                                    let mut s = state_c.lock().await;
+                                                    s.preview_image = Some(img);
+                                                    s.preview_loading = false;
+                                                } else {
+                                                    let mut s = state_c.lock().await;
+                                                    s.preview_content =
+                                                        "Failed to decode image.".to_string();
+                                                    s.preview_loading = false;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                let mut s = state_c.lock().await;
+                                                s.preview_content =
+                                                    format!("Error fetching image: {}", e);
+                                                s.preview_loading = false;
+                                            }
+                                        }
+                                    } else if is_video_file(&item_path) {
+                                        let mut s = state_c.lock().await;
+                                        s.preview_content =
+                                            "Video preview not supported yet.".to_string();
+                                        s.preview_loading = false;
+                                    } else {
+                                        match client_c.fetch_partial_content(&url, 16 * 1024).await {
+                                            Ok(content) => {
+                                                let mut s = state_c.lock().await;
+                                                s.preview_content = content;
+                                                s.preview_loading = false;
+                                            }
+                                            Err(e) => {
+                                                let mut s = state_c.lock().await;
+                                                s.preview_content =
+                                                    format!("Error fetching preview: {}", e);
+                                                s.preview_loading = false;
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if !s.is_searching => {
                     let items = s.get_view_items();
                     if let Some(item) = items.get(s.cursor).cloned() {
@@ -676,6 +768,17 @@ async fn handle_input(
                 _ => {}
             }
         }
+        AppMode::Preview => match key.code {
+            KeyCode::Esc
+            | KeyCode::Char('q')
+            | KeyCode::Char('Q')
+            | KeyCode::Backspace
+            | KeyCode::Left
+            | KeyCode::Char('h') => {
+                s.mode = AppMode::Browse;
+            }
+            _ => {}
+        },
     }
 
     Ok(false)
@@ -983,4 +1086,22 @@ fn map_tree_to_items(
             }
         })
         .collect()
+}
+
+fn is_media_file(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".bmp")
+        || lower.ends_with(".webp")
+}
+
+fn is_video_file(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".mp4")
+        || lower.ends_with(".mkv")
+        || lower.ends_with(".avi")
+        || lower.ends_with(".webm")
 }

@@ -329,6 +329,40 @@ impl GitHubClient {
         Ok(content)
     }
 
+    pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let response = self.request(reqwest::Method::GET, url, None).await?;
+        let bytes = response
+            .bytes()
+            .await
+            .context("Failed to read binary content")?;
+        Ok(bytes.to_vec())
+    }
+
+    pub async fn fetch_partial_content(&self, url: &str, max_bytes: u64) -> Result<String> {
+        let mut builder = self.client.request(reqwest::Method::GET, url);
+
+        if let Some(token) = &self.token {
+            builder = builder.header("Authorization", format!("token {}", token));
+        }
+
+        // Add Range header for partial download
+        builder = builder.header("Range", format!("bytes=0-{}", max_bytes));
+
+        let response = builder
+            .send()
+            .await
+            .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+
+        if !response.status().is_success()
+            && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+        {
+            return Err(anyhow!("GitHub API error: {}", response.status()));
+        }
+
+        let content = response.text().await.context("Failed to read content")?;
+        Ok(content)
+    }
+
     // Call LFS batch API
     pub async fn get_lfs_download_url(
         &self,
