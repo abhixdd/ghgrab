@@ -241,10 +241,10 @@ pub async fn run_tui(
     state_init.download_path = download_path;
     state_init.cwd = cwd;
     state_init.no_folder = no_folder;
-    
+
     // Initialize Picker
     state_init.picker = Some(Picker::new((8, 12))); // Safe fallback for cell size
-    
+
     let has_initial_url = initial_url.is_some();
 
     if let Some(url) = initial_url {
@@ -672,7 +672,8 @@ async fn handle_input(
                                             "Video preview not supported yet.".to_string();
                                         s.preview_loading = false;
                                     } else {
-                                        match client_c.fetch_partial_content(&url, 16 * 1024).await {
+                                        match client_c.fetch_partial_content(&url, 16 * 1024).await
+                                        {
                                             Ok(content) => {
                                                 let mut s = state_c.lock().await;
                                                 s.preview_content = content;
