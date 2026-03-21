@@ -84,6 +84,9 @@ For scripts, agents, and other non-interactive workflows, `ghgrab` includes a ma
 # Fetch the repository tree as JSON
 ghgrab agent tree https://github.com/rust-lang/rust
 
+# Fetch the repository tree with an explicit token for scripts or agents
+ghgrab agent tree https://github.com/rust-lang/rust --token YOUR_TOKEN
+
 # Download specific paths from a repository
 ghgrab agent download https://github.com/rust-lang/rust src/tools README.md --out ./tmp
 
@@ -96,6 +99,8 @@ ghgrab agent download https://github.com/rust-lang/rust --repo --out ./tmp
 # Download into the current working directory without creating a repo folder
 ghgrab agent download https://github.com/rust-lang/rust src/tools --cwd --no-folder
 ```
+
+You can pass `--token <TOKEN>` to `agent tree` and `agent download` when an external tool, CI job, or coding agent should authenticate without relying on saved local config.
 
 ### Configuration
 
