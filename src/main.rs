@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use ghgrab::agent::{self, AgentEnvelope};
 use ghgrab::config::Config;
 
 use ghgrab::ui;
@@ -27,6 +28,10 @@ enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigCommand,
+    },
+    Agent {
+        #[command(subcommand)]
+        action: AgentCommand,
     },
 }
 
@@ -59,9 +64,36 @@ enum UnsetTarget {
     Path,
 }
 
+#[derive(Subcommand)]
+enum AgentCommand {
+    Tree {
+        url: String,
+        #[arg(long, help = "One-time GitHub token for this run")]
+        token: Option<String>,
+    },
+    Download {
+        url: String,
+        #[arg(help = "Repo paths to download")]
+        paths: Vec<String>,
+        #[arg(long, help = "Download the entire repository")]
+        repo: bool,
+        #[arg(long, help = "Download a specific subtree path")]
+        subtree: Option<String>,
+        #[arg(long, help = "Download files to current directory")]
+        cwd: bool,
+        #[arg(long, help = "Download files directly into target without repo folder")]
+        no_folder: bool,
+        #[arg(long, help = "Custom output directory for this run")]
+        out: Option<String>,
+        #[arg(long, help = "One-time GitHub token for this run")]
+        token: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let default_config = Config::load().unwrap_or_default();
 
     match cli.command {
         Some(Commands::Config { action }) => match action {
@@ -98,7 +130,7 @@ async fn main() -> Result<()> {
                 }
             },
             ConfigCommand::List => {
-                let config = Config::load().unwrap_or_default();
+                let config = default_config;
                 if let Some(token) = &config.github_token {
                     let masked = if token.len() > 8 {
                         format!("{}...{}", &token[..4], &token[token.len() - 4..])
@@ -117,17 +149,79 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Some(Commands::Agent { action }) => match action {
+            AgentCommand::Tree { url, token } => {
+                let token = token.or(default_config.github_token.clone());
+                let result = agent::fetch_tree(&url, token).await;
+                print_agent_json("tree", result)?;
+            }
+            AgentCommand::Download {
+                url,
+                paths,
+                repo,
+                subtree,
+                cwd,
+                no_folder,
+                out,
+                token,
+            } => {
+                let token = token.or(default_config.github_token.clone());
+                let out = out.or(default_config.download_path.clone());
+                let selected_paths = build_download_request(paths, repo, subtree);
+                let result = match selected_paths {
+                    Ok(selected_paths) => {
+                        agent::download_paths(&url, token, &selected_paths, out, cwd, no_folder)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
+                print_agent_json("download", result)?;
+            }
+        },
         None => {
-            let config = Config::load().unwrap_or_default();
-
             let url = cli.url;
 
-            let download_path = config.download_path;
+            let download_path = default_config.download_path;
 
-            let token = cli.token.or(config.github_token);
+            let token = cli.token.or(default_config.github_token);
             ui::run_tui(url, token, download_path, cli.cwd, cli.no_folder).await?;
         }
     }
 
+    Ok(())
+}
+
+fn build_download_request(
+    paths: Vec<String>,
+    repo: bool,
+    subtree: Option<String>,
+) -> Result<Vec<String>> {
+    if repo && (!paths.is_empty() || subtree.is_some()) {
+        anyhow::bail!("--repo cannot be combined with paths or --subtree");
+    }
+
+    if repo {
+        return Ok(Vec::new());
+    }
+
+    if let Some(subtree) = subtree {
+        if !paths.is_empty() {
+            anyhow::bail!("--subtree cannot be combined with positional paths");
+        }
+        return Ok(vec![subtree]);
+    }
+
+    Ok(paths)
+}
+
+fn print_agent_json<T: serde::Serialize>(command: &str, result: anyhow::Result<T>) -> Result<()> {
+    let payload = match result {
+        Ok(data) => AgentEnvelope::success(command, data),
+        Err(error) => {
+            AgentEnvelope::<T>::error(command, agent::classify_error(&error), error.to_string())
+        }
+    };
+
+    println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }

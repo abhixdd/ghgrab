@@ -56,14 +56,11 @@ impl Downloader {
         let lfs_indicator = if item.is_lfs() { " [LFS]" } else { "" };
         progress_callback(format!("Downloading{}: {}", lfs_indicator, item.name));
 
-        let response = reqwest::get(download_url)
+        let content = self
+            .client
+            .fetch_bytes(download_url)
             .await
             .context("Failed to download file")?;
-
-        let content = response
-            .bytes()
-            .await
-            .context("Failed to read file content")?;
 
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
