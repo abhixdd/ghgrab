@@ -113,9 +113,13 @@ pub async fn download_paths(
 ) -> Result<AgentDownloadResponse> {
     let client = GitHubClient::new(token.clone())?;
     let gh_url = GitHubUrl::parse(url)?;
-    let (gh_url, entries, _) = load_tree(&client, gh_url).await?;
+    let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
-    let items_to_download = resolve_requested_items(&entries, selected_paths)?;
+    let items_to_download = if truncated {
+        resolve_requested_items_with_fallback(&client, &gh_url, &entries, selected_paths).await?
+    } else {
+        resolve_requested_items(&entries, selected_paths)?
+    };
     let repo_name = gh_url.repo.clone();
 
     let base_dir = resolve_base_dir(output_path, cwd)?;
@@ -141,6 +145,45 @@ pub async fn download_paths(
             .collect(),
         errors,
     })
+}
+
+async fn resolve_requested_items_with_fallback(
+    client: &GitHubClient,
+    gh_url: &GitHubUrl,
+    entries: &[RepoItem],
+    selected_paths: &[String],
+) -> Result<Vec<RepoItem>> {
+    if selected_paths.is_empty() {
+        return fetch_path_items_recursive(client, gh_url, "").await;
+    }
+
+    let mut results = Vec::new();
+    for selected_path in selected_paths {
+        let normalized = normalize_requested_path(selected_path);
+
+        if let Some(item) = entries.iter().find(|item| item.path == normalized) {
+            if item.is_file() {
+                results.push(item.clone());
+            } else {
+                let mut nested = fetch_path_items_recursive(client, gh_url, &normalized).await?;
+                results.append(&mut nested);
+            }
+            continue;
+        }
+
+        let mut nested = fetch_path_items_recursive(client, gh_url, &normalized).await?;
+        if nested.is_empty() {
+            return Err(anyhow!(
+                "Path '{}' was not found in the repository tree",
+                normalized
+            ));
+        }
+        results.append(&mut nested);
+    }
+
+    results.sort_by(|a, b| a.path.cmp(&b.path));
+    results.dedup_by(|a, b| a.path == b.path);
+    Ok(results)
 }
 
 pub fn classify_error(error: &anyhow::Error) -> &'static str {
@@ -211,6 +254,44 @@ async fn load_tree(
                 .await;
             Ok((gh_url, items, true))
         }
+    }
+}
+
+async fn fetch_path_items_recursive(
+    client: &GitHubClient,
+    gh_url: &GitHubUrl,
+    path: &str,
+) -> Result<Vec<RepoItem>> {
+    let request_url = contents_api_url(&gh_url.owner, &gh_url.repo, &gh_url.branch, path);
+    let mut items = client.fetch_contents(&request_url).await?;
+    client
+        .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
+        .await;
+
+    let mut results = Vec::new();
+    for item in items {
+        if item.is_file() {
+            results.push(item);
+        } else {
+            let mut nested =
+                Box::pin(fetch_path_items_recursive(client, gh_url, &item.path)).await?;
+            if nested.is_empty() {
+                continue;
+            }
+            results.append(&mut nested);
+        }
+    }
+
+    Ok(results)
+}
+
+fn contents_api_url(owner: &str, repo: &str, branch: &str, path: &str) -> String {
+    let base = format!("https://api.github.com/repos/{}/{}/contents", owner, repo);
+    let normalized = normalize_requested_path(path);
+    if normalized.is_empty() {
+        format!("{}?ref={}", base, branch)
+    } else {
+        format!("{}/{}?ref={}", base, normalized, branch)
     }
 }
 
@@ -415,6 +496,22 @@ mod tests {
     #[test]
     fn normalizes_windows_style_paths() {
         assert_eq!(normalize_requested_path("\\src\\main.rs\\"), "src/main.rs");
+    }
+
+    #[test]
+    fn builds_contents_api_url_for_root() {
+        assert_eq!(
+            contents_api_url("o", "r", "main", ""),
+            "https://api.github.com/repos/o/r/contents?ref=main"
+        );
+    }
+
+    #[test]
+    fn builds_contents_api_url_for_nested_path() {
+        assert_eq!(
+            contents_api_url("o", "r", "main", "\\src\\tools\\"),
+            "https://api.github.com/repos/o/r/contents/src/tools?ref=main"
+        );
     }
 
     #[test]
