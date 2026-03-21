@@ -219,3 +219,141 @@ fn test_clear_logic() {
     assert!(state.url_input.is_empty());
     assert_eq!(state.url_cursor, 0);
 }
+
+#[test]
+fn test_unicode_insert() {
+    let mut state = AppState::new();
+
+    let c = 'ñ';
+    let byte_pos = state
+        .url_input
+        .char_indices()
+        .nth(state.url_cursor)
+        .map(|(i, _)| i)
+        .unwrap_or(state.url_input.len());
+    state.url_input.insert(byte_pos, c);
+    state.url_cursor += 1;
+
+    assert_eq!(state.url_input, "ñ");
+    assert_eq!(state.url_cursor, 1);
+    assert_eq!(state.url_input.len(), 2);
+
+    let c = '中';
+    let byte_pos = state
+        .url_input
+        .char_indices()
+        .nth(state.url_cursor)
+        .map(|(i, _)| i)
+        .unwrap_or(state.url_input.len());
+    state.url_input.insert(byte_pos, c);
+    state.url_cursor += 1;
+
+    assert_eq!(state.url_input, "ñ中");
+    assert_eq!(state.url_cursor, 2);
+    assert_eq!(state.url_input.len(), 5);
+
+    let c = 'a';
+    let byte_pos = state
+        .url_input
+        .char_indices()
+        .nth(state.url_cursor)
+        .map(|(i, _)| i)
+        .unwrap_or(state.url_input.len());
+    state.url_input.insert(byte_pos, c);
+    state.url_cursor += 1;
+
+    assert_eq!(state.url_input, "ñ中a");
+    assert_eq!(state.url_cursor, 3);
+}
+
+#[test]
+fn test_unicode_backspace() {
+    let mut state = AppState::new();
+    state.url_input = "héllo".to_string();
+    state.url_cursor = 2;
+
+    let byte_pos = state
+        .url_input
+        .char_indices()
+        .nth(state.url_cursor - 1)
+        .map(|(i, _)| i)
+        .unwrap();
+    state.url_input.remove(byte_pos);
+    state.url_cursor -= 1;
+
+    assert_eq!(state.url_input, "hllo");
+    assert_eq!(state.url_cursor, 1);
+}
+
+#[test]
+fn test_unicode_cursor_movement() {
+    let mut state = AppState::new();
+    state.url_input = "café".to_string();
+    state.url_cursor = 0;
+
+    let char_count = state.url_input.chars().count();
+    assert_eq!(char_count, 4);
+
+    for expected in 1..=4 {
+        if state.url_cursor < state.url_input.chars().count() {
+            state.url_cursor += 1;
+        }
+        assert_eq!(state.url_cursor, expected);
+    }
+
+    if state.url_cursor < state.url_input.chars().count() {
+        state.url_cursor += 1;
+    }
+    assert_eq!(state.url_cursor, 4);
+
+    for expected in (0..4).rev() {
+        if state.url_cursor > 0 {
+            state.url_cursor -= 1;
+        }
+        assert_eq!(state.url_cursor, expected);
+    }
+}
+
+#[test]
+fn test_unicode_insert_in_middle() {
+    let mut state = AppState::new();
+    state.url_input = "ab".to_string();
+    state.url_cursor = 1;
+
+    let c = 'ñ';
+    let byte_pos = state
+        .url_input
+        .char_indices()
+        .nth(state.url_cursor)
+        .map(|(i, _)| i)
+        .unwrap_or(state.url_input.len());
+    state.url_input.insert(byte_pos, c);
+    state.url_cursor += 1;
+
+    assert_eq!(state.url_input, "añb");
+    assert_eq!(state.url_cursor, 2);
+}
+
+#[test]
+fn test_unicode_cursor_render_logic() {
+    let input_text = "café";
+    let url_cursor: usize = 3;
+
+    let mut s = input_text.to_string();
+    let char_count = s.chars().count();
+    assert_eq!(char_count, 4);
+
+    if url_cursor >= char_count {
+        s.push('_');
+    } else {
+        let start = s.char_indices().nth(url_cursor).map(|(i, _)| i).unwrap();
+        let end = s
+            .char_indices()
+            .nth(url_cursor + 1)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        s.replace_range(start..end, "_");
+    }
+
+    assert_eq!(s, "caf_");
+}

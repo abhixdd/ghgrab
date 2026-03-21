@@ -402,8 +402,13 @@ async fn handle_input(
                     KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
                 ) =>
             {
-                let pos = s.url_cursor;
-                s.url_input.insert(pos, c);
+                let byte_pos = s
+                    .url_input
+                    .char_indices()
+                    .nth(s.url_cursor)
+                    .map(|(i, _)| i)
+                    .unwrap_or(s.url_input.len());
+                s.url_input.insert(byte_pos, c);
                 s.url_cursor += 1;
             }
             KeyCode::Backspace => {
@@ -414,8 +419,13 @@ async fn handle_input(
                     s.url_input.clear();
                     s.url_cursor = 0;
                 } else if s.url_cursor > 0 {
-                    let pos = s.url_cursor;
-                    s.url_input.remove(pos - 1);
+                    let byte_pos = s
+                        .url_input
+                        .char_indices()
+                        .nth(s.url_cursor - 1)
+                        .map(|(i, _)| i)
+                        .unwrap();
+                    s.url_input.remove(byte_pos);
                     s.url_cursor -= 1;
                 }
             }
@@ -436,7 +446,7 @@ async fn handle_input(
                 }
             }
             KeyCode::Right => {
-                if s.url_cursor < s.url_input.len() {
+                if s.url_cursor < s.url_input.chars().count() {
                     s.url_cursor += 1;
                 }
             }
@@ -446,7 +456,7 @@ async fn handle_input(
                     || (target.starts_with(&s.url_input) && s.url_input.len() < target.len())
                 {
                     s.url_input = target.to_string();
-                    s.url_cursor = s.url_input.len();
+                    s.url_cursor = s.url_input.chars().count();
                 }
             }
             KeyCode::Esc => return Ok(true),

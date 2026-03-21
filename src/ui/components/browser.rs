@@ -165,17 +165,20 @@ pub fn render(f: &mut Frame, area: Rect, state: &BrowserState) {
                 &item.name
             };
 
-            let display_name = if source_name.len() > 35 {
+            let source_char_count = source_name.chars().count();
+            let display_name = if source_char_count > 35 {
                 if let Some(dot_pos) = source_name.rfind('.') {
                     let ext = &source_name[dot_pos..];
-                    let name_part = &source_name[..dot_pos];
-                    if name_part.len() > 30 {
-                        format!("{}.....{}", &name_part[..30], ext)
+                    let name_part_chars = source_name[..dot_pos].chars().count();
+                    if name_part_chars > 30 {
+                        let truncated: String = source_name.chars().take(30).collect();
+                        format!("{}.....{}", truncated, ext)
                     } else {
                         source_name.clone()
                     }
                 } else {
-                    format!("{}.....", &source_name[..35])
+                    let truncated: String = source_name.chars().take(35).collect();
+                    format!("{}.....", truncated)
                 }
             } else {
                 source_name.clone()

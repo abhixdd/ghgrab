@@ -127,10 +127,16 @@ pub fn render(
         }
     } else if cursor_visible {
         let mut s = input_text.to_string();
-        if url_cursor >= s.len() {
+        if url_cursor >= s.chars().count() {
             s.push('_');
         } else {
-            s.replace_range(url_cursor..url_cursor + 1, "_");
+            let start = s.char_indices().nth(url_cursor).map(|(i, _)| i).unwrap();
+            let end = s
+                .char_indices()
+                .nth(url_cursor + 1)
+                .map(|(i, _)| i)
+                .unwrap_or(s.len());
+            s.replace_range(start..end, "_");
         }
         Line::from(Span::raw(s))
     } else {
