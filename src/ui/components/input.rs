@@ -148,7 +148,7 @@ pub fn render(
             Block::default()
                 .borders(Borders::ALL)
                 .title(Span::styled(
-                    " Enter GitHub URL ",
+                    " Enter GitHub URL or Search Query ",
                     Style::default()
                         .fg(ACCENT_COLOR)
                         .add_modifier(Modifier::BOLD),
@@ -209,7 +209,7 @@ pub fn render(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "Works with any public or private GitHub repository",
+                "Paste full GitHub URL or type keywords to discover repositories",
                 Style::default().fg(FG_COLOR).add_modifier(Modifier::ITALIC),
             ),
         ]),

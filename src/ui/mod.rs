@@ -11,10 +11,13 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::github::{GitHubClient, GitHubError, GitHubUrl, RepoItem};
+use crate::github::{GitHubClient, GitHubError, GitHubUrl, RepoItem, RepoSearchItem};
 
 pub mod components;
 pub mod theme;
+
+const REPO_DISCOVERY_PER_PAGE: u8 = 100;
+const REPO_DISCOVERY_PREFETCH_THRESHOLD: usize = 20;
 
 fn install_panic_hook() {
     let original_hook = std::panic::take_hook();
@@ -29,6 +32,8 @@ fn install_panic_hook() {
 pub enum AppMode {
     Input,
     Searching,
+    RepoSearching,
+    RepoResults,
     Browse,
     Preview,
 }
@@ -60,6 +65,15 @@ pub struct AppState {
     pub preview_path: String,
     pub preview_loading: bool,
     pub preview_is_image: bool,
+    pub repo_query: String,
+    pub repo_results: Vec<RepoSearchItem>,
+    pub repo_results_cursor: usize,
+    pub repo_results_scroll: usize,
+    pub repo_search_status: String,
+    pub repo_search_page: u32,
+    pub repo_search_total_count: u64,
+    pub repo_search_loading_more: bool,
+    pub repo_filter_query: String,
 }
 
 impl Default for AppState {
@@ -97,6 +111,15 @@ impl AppState {
             preview_path: String::new(),
             preview_loading: false,
             preview_is_image: false,
+            repo_query: String::new(),
+            repo_results: Vec::new(),
+            repo_results_cursor: 0,
+            repo_results_scroll: 0,
+            repo_search_status: String::new(),
+            repo_search_page: 0,
+            repo_search_total_count: 0,
+            repo_search_loading_more: false,
+            repo_filter_query: String::new(),
         }
     }
 
@@ -326,6 +349,35 @@ async fn event_loop(
                             &state_lock.status_message,
                         );
                     }
+                    AppMode::RepoSearching => {
+                        components::searching::render(
+                            f,
+                            size,
+                            frame_count,
+                            &state_lock.repo_search_status,
+                        );
+                    }
+                    AppMode::RepoResults => {
+                        let ranked_indices = get_ranked_repo_indices(
+                            &state_lock.repo_results,
+                            &state_lock.repo_filter_query,
+                        );
+                        let filtered_results: Vec<RepoSearchItem> = ranked_indices
+                            .iter()
+                            .map(|idx| state_lock.repo_results[*idx].clone())
+                            .collect();
+                        let results_state = components::repo_results::RepoResultsState {
+                            query: &state_lock.repo_query,
+                            filter_query: &state_lock.repo_filter_query,
+                            results: &filtered_results,
+                            cursor: state_lock.repo_results_cursor,
+                            scroll_offset: state_lock.repo_results_scroll,
+                            status_msg: &state_lock.repo_search_status,
+                            is_loading_more: state_lock.repo_search_loading_more,
+                            total_count: state_lock.repo_search_total_count,
+                        };
+                        components::repo_results::render(f, size, &results_state);
+                    }
                     AppMode::Browse => {
                         let filtered_items = state_lock.get_view_items();
 
@@ -461,25 +513,47 @@ async fn handle_input(
             }
             KeyCode::Esc => return Ok(true),
             KeyCode::Enter => {
-                let url = s.url_input.clone();
-                s.mode = AppMode::Searching;
-                s.status_message = "Parsing URL...".to_string();
+                let input = s.url_input.trim().to_string();
+                if input.is_empty() {
+                    s.show_toast(
+                        "Enter a GitHub URL or search query".to_string(),
+                        ToastType::Info,
+                    );
+                    return Ok(false);
+                }
 
                 let state_c = state.clone();
                 let client_c = client.clone();
-
-                tokio::spawn(async move {
-                    match GitHubUrl::parse(&url) {
-                        Ok(gh_url) => {
-                            load_repo(state_c, client_c, gh_url).await;
+                if GitHubUrl::parse(&input).is_ok() {
+                    s.mode = AppMode::Searching;
+                    s.status_message = "Parsing URL...".to_string();
+                    tokio::spawn(async move {
+                        match GitHubUrl::parse(&input) {
+                            Ok(gh_url) => {
+                                load_repo(state_c, client_c, gh_url).await;
+                            }
+                            Err(e) => {
+                                let mut s = state_c.lock().await;
+                                s.mode = AppMode::Input;
+                                s.show_toast(format!("Invalid URL: {}", e), ToastType::Error);
+                            }
                         }
-                        Err(e) => {
-                            let mut s = state_c.lock().await;
-                            s.mode = AppMode::Input;
-                            s.show_toast(format!("Invalid URL: {}", e), ToastType::Error);
-                        }
-                    }
-                });
+                    });
+                } else {
+                    s.mode = AppMode::RepoSearching;
+                    s.repo_query = input.clone();
+                    s.repo_search_status = "Searching repositories...".to_string();
+                    s.repo_results.clear();
+                    s.repo_results_cursor = 0;
+                    s.repo_results_scroll = 0;
+                    s.repo_search_page = 0;
+                    s.repo_search_total_count = 0;
+                    s.repo_search_loading_more = false;
+                    s.repo_filter_query.clear();
+                    tokio::spawn(async move {
+                        search_repositories_flow(state_c, client_c, input).await;
+                    });
+                }
             }
             _ => {}
         },
@@ -489,6 +563,90 @@ async fn handle_input(
                 s.status_message = "Search cancelled".to_string();
             }
         }
+        AppMode::RepoSearching => {
+            if key.code == KeyCode::Esc {
+                s.mode = AppMode::Input;
+                s.repo_search_status = "Repository search cancelled".to_string();
+            }
+        }
+        AppMode::RepoResults => match key.code {
+            KeyCode::Esc => {
+                s.mode = AppMode::Input;
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                s.repo_filter_query.clear();
+                s.repo_results_cursor = 0;
+                s.repo_results_scroll = 0;
+            }
+            KeyCode::Backspace => {
+                s.repo_filter_query.pop();
+                s.repo_results_cursor = 0;
+                s.repo_results_scroll = 0;
+                maybe_trigger_repo_prefetch(&mut s, state.clone(), client.clone());
+            }
+            KeyCode::Char(c)
+                if !key.modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                s.repo_filter_query.push(c);
+                s.repo_results_cursor = 0;
+                s.repo_results_scroll = 0;
+                maybe_trigger_repo_prefetch(&mut s, state.clone(), client.clone());
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let ranked_indices = get_ranked_repo_indices(&s.repo_results, &s.repo_filter_query);
+                if ranked_indices.is_empty() {
+                    s.repo_results_cursor = 0;
+                    s.repo_results_scroll = 0;
+                    return Ok(false);
+                }
+                if s.repo_results_cursor > 0 {
+                    s.repo_results_cursor -= 1;
+                    if s.repo_results_cursor < s.repo_results_scroll {
+                        s.repo_results_scroll = s.repo_results_cursor;
+                    }
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let ranked_indices = get_ranked_repo_indices(&s.repo_results, &s.repo_filter_query);
+                if s.repo_results_cursor + 1 < ranked_indices.len() {
+                    s.repo_results_cursor += 1;
+                    let visible_height = 10;
+                    if s.repo_results_cursor >= s.repo_results_scroll + visible_height {
+                        s.repo_results_scroll = s.repo_results_cursor - visible_height + 1;
+                    }
+                }
+                maybe_trigger_repo_prefetch(&mut s, state.clone(), client.clone());
+            }
+            KeyCode::Enter => {
+                let ranked_indices = get_ranked_repo_indices(&s.repo_results, &s.repo_filter_query);
+                let selected_repo = ranked_indices
+                    .get(s.repo_results_cursor)
+                    .and_then(|idx| s.repo_results.get(*idx))
+                    .cloned();
+                if let Some(selected_repo) = selected_repo {
+                    let gh_url = GitHubUrl {
+                        owner: selected_repo.owner.login,
+                        repo: selected_repo.name,
+                        branch: selected_repo
+                            .default_branch
+                            .unwrap_or_else(|| "main".to_string()),
+                        path: String::new(),
+                    };
+                    s.url_input = selected_repo.html_url;
+                    s.url_cursor = s.url_input.chars().count();
+                    s.mode = AppMode::Searching;
+                    s.status_message = "Loading selected repository...".to_string();
+                    let state_c = state.clone();
+                    let client_c = client.clone();
+                    tokio::spawn(async move {
+                        load_repo(state_c, client_c, gh_url).await;
+                    });
+                }
+            }
+            _ => {}
+        },
         AppMode::Browse => {
             match key.code {
                 KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(true),
@@ -764,6 +922,261 @@ async fn handle_input(
     }
 
     Ok(false)
+}
+
+fn maybe_trigger_repo_prefetch(
+    s: &mut AppState,
+    state: Arc<Mutex<AppState>>,
+    client: GitHubClient,
+) {
+    let loaded = s.repo_results.len();
+    let total = s.repo_search_total_count as usize;
+    let has_more = loaded < total;
+    if !has_more || s.repo_search_loading_more || loaded == 0 {
+        return;
+    }
+
+    let ranked_indices = get_ranked_repo_indices(&s.repo_results, &s.repo_filter_query);
+    if s.repo_results_cursor >= ranked_indices.len() && !ranked_indices.is_empty() {
+        s.repo_results_cursor = ranked_indices.len().saturating_sub(1);
+    }
+    let remaining_filtered = ranked_indices
+        .len()
+        .saturating_sub(s.repo_results_cursor + 1);
+    let remaining_loaded = loaded.saturating_sub(s.repo_results_cursor + 1);
+    let should_prefetch = remaining_filtered <= REPO_DISCOVERY_PREFETCH_THRESHOLD
+        || remaining_loaded <= REPO_DISCOVERY_PREFETCH_THRESHOLD;
+    if !should_prefetch {
+        return;
+    }
+
+    s.repo_search_loading_more = true;
+    s.repo_search_status = format!(
+        "Loading more results... ({}/{})",
+        loaded, s.repo_search_total_count
+    );
+    let next_page = s.repo_search_page + 1;
+    let query = s.repo_query.clone();
+    tokio::spawn(async move {
+        load_more_repositories_flow(state, client, query, next_page).await;
+    });
+}
+
+fn get_ranked_repo_indices(results: &[RepoSearchItem], filter_query: &str) -> Vec<usize> {
+    let trimmed = filter_query.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return (0..results.len()).collect();
+    }
+
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    let mut scored: Vec<(usize, i64)> = results
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, repo)| {
+            let searchable = format!(
+                "{} {} {}",
+                repo.full_name.to_lowercase(),
+                repo.name.to_lowercase(),
+                repo.description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+            );
+
+            let mut total_score = 0_i64;
+            for token in &tokens {
+                if let Some(score) = fuzzy_token_score(token, &searchable) {
+                    total_score += score;
+                } else {
+                    return None;
+                }
+            }
+            total_score += (repo.stargazers_count as i64 / 100).min(5_000);
+            Some((idx, total_score))
+        })
+        .collect();
+
+    scored.sort_by(|(idx_a, score_a), (idx_b, score_b)| {
+        score_b
+            .cmp(score_a)
+            .then_with(|| {
+                results[*idx_b]
+                    .stargazers_count
+                    .cmp(&results[*idx_a].stargazers_count)
+            })
+            .then_with(|| results[*idx_a].full_name.cmp(&results[*idx_b].full_name))
+    });
+
+    scored.into_iter().map(|(idx, _)| idx).collect()
+}
+
+fn fuzzy_token_score(token: &str, searchable: &str) -> Option<i64> {
+    if token.is_empty() {
+        return Some(0);
+    }
+
+    if let Some(pos) = searchable.find(token) {
+        let pos_bonus = (2_000_i64 - pos as i64).max(0);
+        let len_bonus = (token.len() as i64) * 50;
+        return Some(10_000 + pos_bonus + len_bonus);
+    }
+
+    let mut score = 0_i64;
+    let mut search_chars = searchable.char_indices();
+    let mut last_match_idx: Option<usize> = None;
+    for ch in token.chars() {
+        let mut matched = None;
+        for (idx, s_ch) in search_chars.by_ref() {
+            if s_ch == ch {
+                matched = Some(idx);
+                break;
+            }
+        }
+        let current_idx = matched?;
+        score += 100;
+        if let Some(last_idx) = last_match_idx {
+            if current_idx == last_idx + 1 {
+                score += 120;
+            } else {
+                score += 20;
+            }
+        } else {
+            score += (500_i64 - current_idx as i64).max(0);
+        }
+        last_match_idx = Some(current_idx);
+    }
+
+    Some(score)
+}
+
+async fn search_repositories_flow(
+    state: Arc<Mutex<AppState>>,
+    client: GitHubClient,
+    query: String,
+) {
+    let mut current_client = client;
+    let mut search_result = current_client
+        .search_repositories(&query, REPO_DISCOVERY_PER_PAGE, 1)
+        .await;
+
+    if let Err(GitHubError::InvalidToken) = &search_result {
+        {
+            let mut s = state.lock().await;
+            s.show_toast(
+                "Invalid token! Falling back to public API.".to_string(),
+                ToastType::Warning,
+            );
+        }
+        if let Ok(no_auth_client) = GitHubClient::new(None) {
+            current_client = no_auth_client;
+            search_result = current_client
+                .search_repositories(&query, REPO_DISCOVERY_PER_PAGE, 1)
+                .await;
+        }
+    }
+
+    let mut s = state.lock().await;
+    match search_result {
+        Ok(page) => {
+            s.repo_results = page.items;
+            s.repo_results_cursor = 0;
+            s.repo_results_scroll = 0;
+            s.repo_search_page = 1;
+            s.repo_search_total_count = page.total_count;
+            s.repo_search_loading_more = false;
+            s.repo_filter_query.clear();
+            if s.repo_results.is_empty() {
+                s.mode = AppMode::Input;
+                s.show_toast(
+                    format!("No repositories found for query: {}", query),
+                    ToastType::Info,
+                );
+            } else {
+                s.mode = AppMode::RepoResults;
+                s.repo_search_status = format!(
+                    "{} of {} repositories loaded for \"{}\"",
+                    s.repo_results.len(),
+                    s.repo_search_total_count,
+                    query
+                );
+                if (s.repo_results.len() < s.repo_search_total_count as usize)
+                    && !s.repo_search_loading_more
+                {
+                    s.repo_search_loading_more = true;
+                    s.repo_search_status = format!(
+                        "Loading more results... ({}/{})",
+                        s.repo_results.len(),
+                        s.repo_search_total_count
+                    );
+                    let state_c = state.clone();
+                    let client_c = current_client.clone();
+                    let query_c = query.clone();
+                    let next_page = s.repo_search_page + 1;
+                    tokio::spawn(async move {
+                        load_more_repositories_flow(state_c, client_c, query_c, next_page).await;
+                    });
+                }
+            }
+        }
+        Err(e) => {
+            s.mode = AppMode::Input;
+            s.repo_search_loading_more = false;
+            let err_msg = match e {
+                GitHubError::RateLimitReached(user) => format!(
+                    "Rate limit reached for {}. Add a token in config for more!",
+                    user
+                ),
+                GitHubError::NotFound(_) => "No repositories matched your query.".to_string(),
+                _ => format!("Repository search failed: {}", e),
+            };
+            s.show_toast(err_msg, ToastType::Error);
+        }
+    }
+}
+
+async fn load_more_repositories_flow(
+    state: Arc<Mutex<AppState>>,
+    client: GitHubClient,
+    query: String,
+    page: u32,
+) {
+    let mut current_client = client;
+    let mut search_result = current_client
+        .search_repositories(&query, REPO_DISCOVERY_PER_PAGE, page)
+        .await;
+
+    if let Err(GitHubError::InvalidToken) = &search_result {
+        if let Ok(no_auth_client) = GitHubClient::new(None) {
+            current_client = no_auth_client;
+            search_result = current_client
+                .search_repositories(&query, REPO_DISCOVERY_PER_PAGE, page)
+                .await;
+        }
+    }
+
+    let mut s = state.lock().await;
+    match search_result {
+        Ok(next_page) => {
+            let added = next_page.items.len();
+            if added > 0 {
+                s.repo_results.extend(next_page.items);
+                s.repo_search_page = page;
+                s.repo_search_total_count = next_page.total_count;
+            }
+            s.repo_search_loading_more = false;
+            s.repo_search_status = format!(
+                "{} of {} repositories loaded for \"{}\"",
+                s.repo_results.len(),
+                s.repo_search_total_count,
+                s.repo_query
+            );
+        }
+        Err(e) => {
+            s.repo_search_loading_more = false;
+            s.repo_search_status = "Failed to load more results".to_string();
+            s.show_toast(format!("Load more failed: {}", e), ToastType::Error);
+        }
+    }
 }
 
 async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url: GitHubUrl) {
