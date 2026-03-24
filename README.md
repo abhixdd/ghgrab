@@ -40,12 +40,12 @@ pipx install ghgrab
 ### Nix 
 To have the latest commit:
 ``` bash
-nix build github:ghgrab/ghgrab
+nix run github:abhixdd/ghgrab
 ```
 
 To have a specific tagged version:
 ``` bash
-nix build "github:ghgrab/ghgrab/<tag>"
+nix run "github:abhixdd/ghgrab/<tag>"
 ```
 
 ---
