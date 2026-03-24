@@ -110,6 +110,35 @@ pub struct RepoItem {
     pub lfs_download_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RepoOwner {
+    pub login: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RepoSearchItem {
+    pub name: String,
+    pub full_name: String,
+    pub owner: RepoOwner,
+    pub default_branch: Option<String>,
+    pub description: Option<String>,
+    pub stargazers_count: u64,
+    pub html_url: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepoSearchResponse {
+    total_count: u64,
+    items: Vec<RepoSearchItem>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepoSearchPage {
+    pub total_count: u64,
+    pub items: Vec<RepoSearchItem>,
+}
+
 impl RepoItem {
     pub fn is_dir(&self) -> bool {
         self.item_type == "dir"
@@ -319,6 +348,29 @@ impl GitHubClient {
             .await
             .map_err(|e| GitHubError::ApiError(e.to_string()))?;
         Ok(tree)
+    }
+
+    pub async fn search_repositories(
+        &self,
+        query: &str,
+        per_page: u8,
+        page: u32,
+    ) -> std::result::Result<RepoSearchPage, GitHubError> {
+        let encoded_query: String =
+            url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+        let url = format!(
+            "https://api.github.com/search/repositories?q={}&sort=stars&order=desc&per_page={}&page={}",
+            encoded_query, per_page, page
+        );
+        let response = self.request(reqwest::Method::GET, &url, None).await?;
+        let payload: RepoSearchResponse = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+        Ok(RepoSearchPage {
+            total_count: payload.total_count,
+            items: payload.items,
+        })
     }
 
     // Fetch raw content
