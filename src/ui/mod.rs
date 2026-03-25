@@ -5,6 +5,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use ratatui::text::Text;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::github::{GitHubClient, GitHubError, GitHubUrl, RepoItem};
+use crate::ui::components::syntax_highlighting::highlight_content;
 
 pub mod components;
 pub mod theme;
@@ -57,6 +59,7 @@ pub struct AppState {
     pub search_query: String,
     pub selected_paths: HashSet<String>,
     pub preview_content: String,
+    pub preview_text: Option<Text<'static>>,
     pub preview_path: String,
     pub preview_loading: bool,
     pub preview_is_image: bool,
@@ -94,6 +97,7 @@ impl AppState {
             search_query: String::new(),
             selected_paths: HashSet::new(),
             preview_content: String::new(),
+            preview_text: None,
             preview_path: String::new(),
             preview_loading: false,
             preview_is_image: false,
@@ -347,6 +351,7 @@ async fn event_loop(
                         let s = &mut *state_lock;
                         let preview_state = components::preview::PreviewState {
                             content: &s.preview_content,
+                            text: s.preview_text.clone(),
                             path: &s.preview_path,
                             loading: s.preview_loading,
                             is_image: s.preview_is_image,
@@ -639,6 +644,7 @@ async fn handle_input(
                                 s.mode = AppMode::Preview;
                                 s.preview_path = item.path.clone();
                                 s.preview_content = String::new();
+                                s.preview_text = None;
                                 s.preview_is_image = false;
                                 s.preview_loading = true;
 
@@ -652,18 +658,23 @@ async fn handle_input(
                                         let mut s = state_c.lock().await;
                                         s.preview_is_image = true;
                                         s.preview_loading = false;
+                                        s.preview_text = None;
                                     } else {
                                         match client_c.fetch_partial_content(&url, 16 * 1024).await
                                         {
                                             Ok(content) => {
+                                                let highlighted =
+                                                    highlight_content(&content, &item_path);
                                                 let mut s = state_c.lock().await;
                                                 s.preview_content = content;
+                                                s.preview_text = Some(highlighted);
                                                 s.preview_loading = false;
                                             }
                                             Err(e) => {
                                                 let mut s = state_c.lock().await;
                                                 s.preview_content =
                                                     format!("Error fetching preview: {}", e);
+                                                s.preview_text = None;
                                                 s.preview_loading = false;
                                             }
                                         }
