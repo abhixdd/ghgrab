@@ -74,6 +74,10 @@ pub struct AppState {
     pub repo_search_total_count: u64,
     pub repo_search_loading_more: bool,
     pub repo_filter_query: String,
+    pub repo_searchables: Vec<String>,
+    pub repo_ranked_filter_query: String,
+    pub repo_ranked_results_len: usize,
+    pub repo_ranked_indices: Vec<usize>,
 }
 
 impl Default for AppState {
@@ -120,6 +124,10 @@ impl AppState {
             repo_search_total_count: 0,
             repo_search_loading_more: false,
             repo_filter_query: String::new(),
+            repo_searchables: Vec::new(),
+            repo_ranked_filter_query: String::new(),
+            repo_ranked_results_len: 0,
+            repo_ranked_indices: Vec::new(),
         }
     }
 
@@ -358,18 +366,12 @@ async fn event_loop(
                         );
                     }
                     AppMode::RepoResults => {
-                        let ranked_indices = get_ranked_repo_indices(
-                            &state_lock.repo_results,
-                            &state_lock.repo_filter_query,
-                        );
-                        let filtered_results: Vec<RepoSearchItem> = ranked_indices
-                            .iter()
-                            .map(|idx| state_lock.repo_results[*idx].clone())
-                            .collect();
+                        ensure_repo_ranking_cached(&mut state_lock);
                         let results_state = components::repo_results::RepoResultsState {
                             query: &state_lock.repo_query,
                             filter_query: &state_lock.repo_filter_query,
-                            results: &filtered_results,
+                            results: &state_lock.repo_results,
+                            ranked_indices: &state_lock.repo_ranked_indices,
                             cursor: state_lock.repo_results_cursor,
                             scroll_offset: state_lock.repo_results_scroll,
                             status_msg: &state_lock.repo_search_status,
@@ -582,6 +584,7 @@ async fn handle_input(
                 s.repo_filter_query.pop();
                 s.repo_results_cursor = 0;
                 s.repo_results_scroll = 0;
+                ensure_repo_ranking_cached(&mut s);
                 maybe_trigger_repo_prefetch(&mut s, state.clone(), client.clone());
             }
             KeyCode::Char(c)
@@ -592,11 +595,12 @@ async fn handle_input(
                 s.repo_filter_query.push(c);
                 s.repo_results_cursor = 0;
                 s.repo_results_scroll = 0;
+                ensure_repo_ranking_cached(&mut s);
                 maybe_trigger_repo_prefetch(&mut s, state.clone(), client.clone());
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                let ranked_indices = get_ranked_repo_indices(&s.repo_results, &s.repo_filter_query);
-                if ranked_indices.is_empty() {
+                ensure_repo_ranking_cached(&mut s);
+                if s.repo_ranked_indices.is_empty() {
                     s.repo_results_cursor = 0;
                     s.repo_results_scroll = 0;
                     return Ok(false);
@@ -609,8 +613,8 @@ async fn handle_input(
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let ranked_indices = get_ranked_repo_indices(&s.repo_results, &s.repo_filter_query);
-                if s.repo_results_cursor + 1 < ranked_indices.len() {
+                ensure_repo_ranking_cached(&mut s);
+                if s.repo_results_cursor + 1 < s.repo_ranked_indices.len() {
                     s.repo_results_cursor += 1;
                     let visible_height = 10;
                     if s.repo_results_cursor >= s.repo_results_scroll + visible_height {
@@ -620,8 +624,9 @@ async fn handle_input(
                 maybe_trigger_repo_prefetch(&mut s, state.clone(), client.clone());
             }
             KeyCode::Enter => {
-                let ranked_indices = get_ranked_repo_indices(&s.repo_results, &s.repo_filter_query);
-                let selected_repo = ranked_indices
+                ensure_repo_ranking_cached(&mut s);
+                let selected_repo = s
+                    .repo_ranked_indices
                     .get(s.repo_results_cursor)
                     .and_then(|idx| s.repo_results.get(*idx))
                     .cloned();
@@ -936,11 +941,12 @@ fn maybe_trigger_repo_prefetch(
         return;
     }
 
-    let ranked_indices = get_ranked_repo_indices(&s.repo_results, &s.repo_filter_query);
-    if s.repo_results_cursor >= ranked_indices.len() && !ranked_indices.is_empty() {
-        s.repo_results_cursor = ranked_indices.len().saturating_sub(1);
+    ensure_repo_ranking_cached(s);
+    if s.repo_results_cursor >= s.repo_ranked_indices.len() && !s.repo_ranked_indices.is_empty() {
+        s.repo_results_cursor = s.repo_ranked_indices.len().saturating_sub(1);
     }
-    let remaining_filtered = ranked_indices
+    let remaining_filtered = s
+        .repo_ranked_indices
         .len()
         .saturating_sub(s.repo_results_cursor + 1);
     let remaining_loaded = loaded.saturating_sub(s.repo_results_cursor + 1);
@@ -962,30 +968,55 @@ fn maybe_trigger_repo_prefetch(
     });
 }
 
-fn get_ranked_repo_indices(results: &[RepoSearchItem], filter_query: &str) -> Vec<usize> {
-    let trimmed = filter_query.trim().to_lowercase();
-    if trimmed.is_empty() {
+fn build_repo_searchable(repo: &RepoSearchItem) -> String {
+    let desc = repo.description.as_deref().unwrap_or_default();
+    format!(
+        "{} {} {}",
+        repo.full_name.to_lowercase(),
+        repo.name.to_lowercase(),
+        desc.to_lowercase()
+    )
+}
+
+fn ensure_repo_ranking_cached(s: &mut AppState) {
+    let trimmed = s.repo_filter_query.trim().to_lowercase();
+    let results_len = s.repo_results.len();
+
+    let cache_valid =
+        s.repo_ranked_results_len == results_len && s.repo_ranked_filter_query == trimmed;
+    if cache_valid {
+        return;
+    }
+
+    // Ensure `repo_searchables` stays aligned with `repo_results`.
+    if s.repo_searchables.len() != results_len {
+        s.repo_searchables = s.repo_results.iter().map(build_repo_searchable).collect();
+    }
+
+    s.repo_ranked_filter_query = trimmed.clone();
+    s.repo_ranked_results_len = results_len;
+    s.repo_ranked_indices =
+        get_ranked_repo_indices_cached(&s.repo_results, &s.repo_searchables, &trimmed);
+}
+
+fn get_ranked_repo_indices_cached(
+    results: &[RepoSearchItem],
+    searchables: &[String],
+    trimmed_filter_query_lower: &str,
+) -> Vec<usize> {
+    if trimmed_filter_query_lower.is_empty() {
         return (0..results.len()).collect();
     }
 
-    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    let tokens: Vec<&str> = trimmed_filter_query_lower.split_whitespace().collect();
     let mut scored: Vec<(usize, i64)> = results
         .iter()
         .enumerate()
         .filter_map(|(idx, repo)| {
-            let searchable = format!(
-                "{} {} {}",
-                repo.full_name.to_lowercase(),
-                repo.name.to_lowercase(),
-                repo.description
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_lowercase()
-            );
-
+            let searchable = searchables.get(idx)?;
             let mut total_score = 0_i64;
             for token in &tokens {
-                if let Some(score) = fuzzy_token_score(token, &searchable) {
+                if let Some(score) = fuzzy_token_score(token, searchable) {
                     total_score += score;
                 } else {
                     return None;
@@ -1079,6 +1110,10 @@ async fn search_repositories_flow(
     match search_result {
         Ok(page) => {
             s.repo_results = page.items;
+            s.repo_searchables = s.repo_results.iter().map(build_repo_searchable).collect();
+            s.repo_ranked_filter_query.clear();
+            s.repo_ranked_results_len = 0;
+            s.repo_ranked_indices.clear();
             s.repo_results_cursor = 0;
             s.repo_results_scroll = 0;
             s.repo_search_page = 1;
@@ -1159,9 +1194,14 @@ async fn load_more_repositories_flow(
         Ok(next_page) => {
             let added = next_page.items.len();
             if added > 0 {
+                s.repo_searchables
+                    .extend(next_page.items.iter().map(build_repo_searchable));
                 s.repo_results.extend(next_page.items);
                 s.repo_search_page = page;
                 s.repo_search_total_count = next_page.total_count;
+
+                // Invalidate ranking cache since results changed.
+                s.repo_ranked_results_len = 0;
             }
             s.repo_search_loading_more = false;
             s.repo_search_status = format!(

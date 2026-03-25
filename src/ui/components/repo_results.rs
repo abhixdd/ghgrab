@@ -13,6 +13,7 @@ pub struct RepoResultsState<'a> {
     pub query: &'a str,
     pub filter_query: &'a str,
     pub results: &'a [RepoSearchItem],
+    pub ranked_indices: &'a [usize],
     pub cursor: usize,
     pub scroll_offset: usize,
     pub status_msg: &'a str,
@@ -51,12 +52,15 @@ pub fn render(f: &mut Frame, area: Rect, state: &RepoResultsState) {
     f.render_widget(header, chunks[0]);
 
     let mut list_items: Vec<ListItem> = state
-        .results
+        .ranked_indices
         .iter()
-        .enumerate()
+        .copied()
         .skip(state.scroll_offset)
-        .map(|(idx, repo)| {
-            let is_selected = idx == state.cursor;
+        .filter_map(|repo_idx| state.results.get(repo_idx).map(|repo| (repo_idx, repo)))
+        .enumerate()
+        .map(|(visible_idx, (_repo_idx, repo))| {
+            let absolute_idx = state.scroll_offset + visible_idx;
+            let is_selected = absolute_idx == state.cursor;
             let description = repo
                 .description
                 .as_deref()
@@ -112,7 +116,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &RepoResultsState) {
             .borders(Borders::ALL)
             .title(format!(
                 " Results ({}/{}) ",
-                state.results.len(),
+                state.ranked_indices.len(),
                 state.total_count
             ))
             .border_style(Style::default().fg(BORDER_COLOR))
