@@ -14,6 +14,7 @@
 - **Easy on the eyes**: A clean terminal interface that makes browsing feel smooth.
 - **Works where you are**: Installs quickly via NPM, Cargo, or PIP.
 - **Find things fast**: Quickly search and navigate through any repo's folders with fuzzy search.
+- **Repo discovery built in**: Type a repo keyword from home to search GitHub repos, filter them, then open instantly.
 - **File Preview**: Preview source code and text files directly in the TUI.
 - **Handles the big stuff**: Built-in support for GitHub LFS (Large File Storage).
 - **Batch mode**: Select a bunch of files and folders to download them all at once.
@@ -23,28 +24,34 @@
 ## Installation
 
 ### NPM
+
 ```bash
 npm install -g @ghgrab/ghgrab
 ```
 
 ### Cargo
+
 ```bash
 cargo install ghgrab
 ```
 
 ### pipx (Recommended for Python)
+
 ```bash
 pipx install ghgrab
 ```
 
-### Nix 
+### Nix
+
 To have the latest commit:
-``` bash
+
+```bash
 nix run github:abhixdd/ghgrab
 ```
 
 To have a specific tagged version:
-``` bash
+
+```bash
 nix run "github:abhixdd/ghgrab/<tag>"
 ```
 
@@ -68,13 +75,15 @@ ghgrab https://github.com/rust-lang/rust
 ghgrab https://github.com/rust-lang/rust --cwd --no-folder
 ```
 
+You can also type a repository keyword on the home screen (for example `ratatui`) and press `Enter` to open repository search mode.
+
 ### CLI Flags
 
-| Flag | Description |
-|------|-------------|
-| `--cwd` | Forces download to the current working directory. |
-| `--no-folder` | Downloads files directly without creating a subfolder for the repo. |
-| `--token <TOKEN>`| Use a specific GitHub token for this run (doesn't save to settings). |
+| Flag              | Description                                                          |
+| ----------------- | -------------------------------------------------------------------- |
+| `--cwd`           | Forces download to the current working directory.                    |
+| `--no-folder`     | Downloads files directly without creating a subfolder for the repo.  |
+| `--token <TOKEN>` | Use a specific GitHub token for this run (doesn't save to settings). |
 
 ### Agent Mode
 
@@ -125,28 +134,41 @@ ghgrab config unset path
 
 We've kept it pretty standard, but here's a quick cheat sheet:
 
-| Key | Action |
-|-----|--------|
-| `Enter` / `l` / `Right` | Enter directory or Submit URL |
-| `Backspace` / `h` / `Left` | Go back to previous folder |
-| `Delete` | Clear URL input (Home page) |
-| `Tab` | Auto-fill `https://github.com/` (Home page) |
-| `/` | Start Searching (File list) |
-| `Esc` | **Exit Search** or **Return Home** (file list) or **Quit** (home screen) |
-| `q` / `Q` | **Quit** (from file list) |
-| `Ctrl+q` | **Force Quit** (anywhere) |
-| `Space` | Toggle selection for the current item |
-| `p` / `P` | **Preview** current file |
-| `a` | Select All items |
-| `u` | Unselect all items |
-| `d` / `D` | Download selected items |
-| `i` | Toggle Icons (Emoji / ASCII) |
-| `g` / `Home` | Jump to Top |
-| `G` / `End` | Jump to Bottom |
+| Key                               | Action                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `Enter` (home)                    | Open URL or start repository search                                      |
+| `Enter` / `l` / `Right` (browser) | Enter directory                                                          |
+| `Backspace` / `h` / `Left`        | Go back to previous folder                                               |
+| `Delete` (home)                   | Delete character at cursor                                               |
+| `Tab`                             | Auto-fill `https://github.com/` (Home page)                              |
+| `/`                               | Start Searching (File list)                                              |
+| `Esc`                             | **Exit Search** or **Return Home** (file list) or **Quit** (home screen) |
+| `q` / `Q`                         | **Quit** (from file list)                                                |
+| `Ctrl+q`                          | **Force Quit** (anywhere)                                                |
+| `Space`                           | Toggle selection for the current item                                    |
+| `p` / `P`                         | **Preview** current file                                                 |
+| `a`                               | Select All items                                                         |
+| `u`                               | Unselect all items                                                       |
+| `d` / `D`                         | Download selected items                                                  |
+| `i`                               | Toggle Icons (Emoji / ASCII)                                             |
+| `g` / `Home`                      | Jump to Top                                                              |
+| `G` / `End`                       | Jump to Bottom                                                           |
+
+### Repository Search Mode Shortcuts
+
+| Key                   | Action                                                             |
+| --------------------- | ------------------------------------------------------------------ |
+| `j` / `k` / `↑` / `↓` | Move selection                                                     |
+| `Enter`               | Open selected repository                                           |
+| `f`                   | Toggle include/exclude forks                                       |
+| `m`                   | Cycle minimum stars (`Any`, `10+`, `50+`, `100+`, `500+`, `1000+`) |
+| `l`                   | Cycle language filter                                              |
+| `s`                   | Cycle sort (`Stars`, `Updated`, `Name`)                            |
+| `x`                   | Reset all filters                                                  |
+| `r`                   | Refresh current search                                             |
+| `Esc`                 | Return to home input                                               |
 
 ---
-
-
 
 ## Join the community
 
