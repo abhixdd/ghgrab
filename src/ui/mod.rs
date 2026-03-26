@@ -1107,6 +1107,7 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
 
     match tree_result {
         Ok(tree_response) => {
+            let is_truncated = tree_response.truncated;
             let items =
                 map_tree_to_items(tree_response, &gh_url.owner, &gh_url.repo, &gh_url.branch);
             let folder_sizes = calculate_folder_sizes(&items);
@@ -1148,7 +1149,14 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
             s.current_url = Some(gh_url);
             s.mode = AppMode::Browse;
             s.status_message = String::new();
-            s.show_toast("Repository Loaded!".to_string(), ToastType::Success);
+            if is_truncated {
+                s.show_toast(
+                    "Warning: Tree was truncated by GitHub API. Some files may be missing.".to_string(),
+                    ToastType::Warning,
+                );
+            } else {
+                s.show_toast("Repository Loaded!".to_string(), ToastType::Success);
+            }
         }
         Err(_) => {
             {
