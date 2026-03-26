@@ -80,8 +80,8 @@ impl<T> AgentEnvelope<T> {
 }
 
 pub async fn fetch_tree(url: &str, token: Option<String>) -> Result<AgentTreeResponse> {
-    let client = GitHubClient::new(token.clone())?;
     let gh_url = GitHubUrl::parse(url)?;
+    let client = GitHubClient::new(token.clone())?;
     let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
     Ok(AgentTreeResponse {
@@ -111,8 +111,8 @@ pub async fn download_paths(
     cwd: bool,
     no_folder: bool,
 ) -> Result<AgentDownloadResponse> {
-    let client = GitHubClient::new(token.clone())?;
     let gh_url = GitHubUrl::parse(url)?;
+    let client = GitHubClient::new(token.clone())?;
     let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
     let items_to_download = if truncated {
