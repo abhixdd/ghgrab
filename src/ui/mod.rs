@@ -112,6 +112,7 @@ pub struct AppState {
     pub toast: Option<Toast>,
     pub icon_mode: IconMode,
     pub github_token: Option<String>,
+    pub terminal_height: u16,
     pub download_path: Option<String>,
     pub full_tree: Option<Vec<RepoItem>>,
     pub folder_sizes: HashMap<String, u64>,
@@ -155,6 +156,7 @@ impl AppState {
             toast: None,
             icon_mode: IconMode::Emoji,
             github_token: None,
+            terminal_height: 24,
             download_path: None,
             full_tree: None,
             folder_sizes: HashMap::new(),
@@ -207,7 +209,11 @@ impl AppState {
     }
 
     fn adjust_scroll(&mut self) {
-        let visible_height = 10;
+        // Subtract space for: breadcrumb (3) + borders (2) + header row (1) + help bar (2)
+        // + optional download status (2) + optional search bar (3)
+        let chrome_height: u16 = 8;
+        let visible_height = (self.terminal_height.saturating_sub(chrome_height)) as usize;
+        let visible_height = visible_height.max(1);
         if self.cursor < self.scroll_offset {
             self.scroll_offset = self.cursor;
         } else if self.cursor >= self.scroll_offset + visible_height {
@@ -488,6 +494,7 @@ async fn event_loop(
 
             terminal.draw(|f| {
                 let size = f.size();
+                state_lock.terminal_height = size.height;
                 f.render_widget(
                     ratatui::widgets::Block::default()
                         .style(ratatui::style::Style::default().bg(theme::BG_COLOR)),
