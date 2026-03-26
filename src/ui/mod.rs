@@ -1150,7 +1150,32 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
             s.status_message = String::new();
             s.show_toast("Repository Loaded!".to_string(), ToastType::Success);
         }
-        Err(_) => {
+        Err(tree_err) => {
+            // Check if the error is a non-recoverable error that should be shown
+            // directly, rather than falling back to folder-by-folder navigation
+            let should_fallback = matches!(
+                &tree_err,
+                GitHubError::ApiError(_) | GitHubError::Other(_)
+            );
+
+            if !should_fallback {
+                let mut s = state_c.lock().await;
+                s.mode = AppMode::Input;
+                let err_msg = match &tree_err {
+                    GitHubError::RateLimitReached(user) => format!(
+                        "Rate limit reached for {}. Add a token in config for more!",
+                        user
+                    ),
+                    GitHubError::NotFound(_) => "Repository or path not found.".to_string(),
+                    GitHubError::InvalidToken => {
+                        "Invalid token. Please check your configuration.".to_string()
+                    }
+                    _ => format!("Error: {}", tree_err),
+                };
+                s.show_toast(err_msg, ToastType::Error);
+                return;
+            }
+
             {
                 let mut s = state_c.lock().await;
                 s.status_message =
