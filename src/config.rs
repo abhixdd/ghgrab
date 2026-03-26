@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub github_token: Option<String>,
     pub download_path: Option<String>,
+    pub icon_mode: Option<crate::ui::IconMode>,
 }
 
 impl Config {

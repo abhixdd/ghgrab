@@ -181,10 +181,25 @@ async fn main() -> Result<()> {
         None => {
             let url = cli.url;
 
-            let download_path = default_config.download_path;
+            let download_path = default_config.download_path.clone();
 
-            let token = cli.token.or(default_config.github_token);
-            ui::run_tui(url, token, download_path, cli.cwd, cli.no_folder).await?;
+            let token = cli.token.or(default_config.github_token.clone());
+            let initial_icon_mode = default_config.icon_mode.unwrap_or(ui::IconMode::Emoji);
+
+            let final_icon_mode = ui::run_tui(
+                url,
+                token,
+                download_path,
+                cli.cwd,
+                cli.no_folder,
+                initial_icon_mode,
+            )
+            .await?;
+            if final_icon_mode != initial_icon_mode {
+                let mut config = Config::load().unwrap_or_default();
+                config.icon_mode = Some(final_icon_mode);
+                let _ = config.save();
+            }
         }
     }
 

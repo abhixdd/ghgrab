@@ -36,7 +36,7 @@ pub enum AppMode {
     Preview,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IconMode {
     Emoji,
     Ascii,
@@ -405,7 +405,8 @@ pub async fn run_tui(
     download_path: Option<String>,
     cwd: bool,
     no_folder: bool,
-) -> Result<()> {
+    icon_mode: IconMode,
+) -> Result<IconMode> {
     install_panic_hook();
     enable_raw_mode().context("Failed to enable raw mode")?;
     let mut stdout = io::stdout();
@@ -420,6 +421,7 @@ pub async fn run_tui(
     state_init.download_path = download_path;
     state_init.cwd = cwd;
     state_init.no_folder = no_folder;
+    state_init.icon_mode = icon_mode;
 
     let has_initial_url = initial_url.is_some();
 
@@ -454,13 +456,17 @@ pub async fn run_tui(
         });
     }
 
+    let state_clone = state.clone();
     let result = event_loop(&mut terminal, state, client).await;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
-    result
+    result?;
+
+    let final_mode = state_clone.lock().await.icon_mode;
+    Ok(final_mode)
 }
 
 async fn event_loop(
