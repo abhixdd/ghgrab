@@ -1038,9 +1038,17 @@ async fn handle_input(
                         drop(s);
 
                         let s_clone = state.clone();
-                        tokio::spawn(
-                            async move { if let Err(_e) = perform_download(s_clone).await {} },
-                        );
+                        tokio::spawn(async move {
+                            if let Err(e) = perform_download(s_clone.clone()).await {
+                                let mut s = s_clone.lock().await;
+                                s.downloading = false;
+                                s.status_message = String::new();
+                                s.show_toast(
+                                    format!("Download failed: {}", e),
+                                    ToastType::Error,
+                                );
+                            }
+                        });
                     }
                 }
                 _ => {}
