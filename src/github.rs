@@ -194,6 +194,22 @@ pub struct GitTreeResponse {
     pub truncated: bool,
 }
 
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct SearchResult {
+    pub items: Vec<SearchItem>,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct SearchItem {
+    pub full_name: String,
+    pub description: Option<String>,
+    pub html_url: String,
+    pub stargazers_count: u32,
+    pub fork: bool,
+    pub language: Option<String>,
+    pub pushed_at: String,
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct GitTreeEntry {
     pub path: String,
@@ -319,6 +335,23 @@ impl GitHubClient {
             .await
             .map_err(|e| GitHubError::ApiError(e.to_string()))?;
         Ok(tree)
+    }
+
+    pub async fn search_repositories(
+        &self,
+        query: &str,
+    ) -> std::result::Result<Vec<SearchItem>, GitHubError> {
+        let url = format!(
+            "https://api.github.com/search/repositories?q={}&sort=stars&order=desc",
+            urlencoding::encode(query)
+        );
+        let response = self.request(reqwest::Method::GET, &url, None).await?;
+
+        let result: SearchResult = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+        Ok(result.items)
     }
 
     // Fetch raw content

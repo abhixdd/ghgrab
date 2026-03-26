@@ -75,8 +75,10 @@ mod tests {
 
     #[test]
     fn test_config_serialization() {
-        let mut config = Config::default();
-        config.github_token = Some("test_token".to_string());
+        let config = Config {
+            github_token: Some("test_token".to_string()),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("test_token"));
 

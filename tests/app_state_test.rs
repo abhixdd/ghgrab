@@ -1,5 +1,5 @@
-use ghgrab::github::RepoItem;
-use ghgrab::ui::AppState;
+use ghgrab::github::{RepoItem, SearchItem};
+use ghgrab::ui::{AppState, RepoSearchSort};
 
 fn make_items(count: usize) -> Vec<RepoItem> {
     (0..count)
@@ -20,6 +20,38 @@ fn make_items(count: usize) -> Vec<RepoItem> {
             lfs_download_url: None,
         })
         .collect()
+}
+
+fn make_search_items() -> Vec<SearchItem> {
+    vec![
+        SearchItem {
+            full_name: "alpha/core".to_string(),
+            description: Some("Core Rust library".to_string()),
+            html_url: "https://github.com/alpha/core".to_string(),
+            stargazers_count: 1200,
+            fork: false,
+            language: Some("Rust".to_string()),
+            pushed_at: "2026-03-20T10:00:00Z".to_string(),
+        },
+        SearchItem {
+            full_name: "beta/ui".to_string(),
+            description: Some("Frontend toolkit".to_string()),
+            html_url: "https://github.com/beta/ui".to_string(),
+            stargazers_count: 80,
+            fork: true,
+            language: Some("TypeScript".to_string()),
+            pushed_at: "2026-03-24T10:00:00Z".to_string(),
+        },
+        SearchItem {
+            full_name: "gamma/tool".to_string(),
+            description: Some("Useful command line tool".to_string()),
+            html_url: "https://github.com/gamma/tool".to_string(),
+            stargazers_count: 600,
+            fork: false,
+            language: Some("Rust".to_string()),
+            pushed_at: "2026-03-25T10:00:00Z".to_string(),
+        },
+    ]
 }
 
 #[test]
@@ -356,4 +388,93 @@ fn test_unicode_cursor_render_logic() {
     }
 
     assert_eq!(s, "caf_");
+}
+
+#[test]
+fn test_repo_search_filters_hide_forks_by_default() {
+    let mut state = AppState::new();
+    state.search_results = make_search_items();
+
+    let filtered = state.get_filtered_search_results();
+
+    assert_eq!(filtered.len(), 2);
+    assert!(filtered.iter().all(|item| !item.fork));
+}
+
+#[test]
+fn test_repo_search_filters_can_include_forks_and_apply_min_stars() {
+    let mut state = AppState::new();
+    state.search_results = make_search_items();
+    state.search_filters.include_forks = true;
+    state.search_filters.min_stars = 100;
+
+    let filtered = state.get_filtered_search_results();
+
+    assert_eq!(filtered.len(), 2);
+    assert_eq!(filtered[0].full_name, "alpha/core");
+    assert_eq!(filtered[1].full_name, "gamma/tool");
+}
+
+#[test]
+fn test_repo_search_language_cycle_and_reset() {
+    let mut state = AppState::new();
+    state.search_results = make_search_items();
+    state.search_cursor = 2;
+
+    state.cycle_repo_search_language();
+    assert_eq!(state.search_filters.language.as_deref(), Some("Rust"));
+    assert_eq!(state.search_cursor, 0);
+
+    state.cycle_repo_search_language();
+    assert_eq!(state.search_filters.language.as_deref(), Some("TypeScript"));
+
+    state.cycle_repo_search_language();
+    assert_eq!(state.search_filters.language, None);
+
+    state.search_filters.include_forks = true;
+    state.search_filters.min_stars = 500;
+    state.search_filters.sort = RepoSearchSort::Updated;
+    state.search_cursor = 1;
+    state.reset_repo_search_filters();
+
+    assert!(!state.search_filters.include_forks);
+    assert_eq!(state.search_filters.min_stars, 0);
+    assert_eq!(state.search_filters.language, None);
+    assert_eq!(state.search_filters.sort, RepoSearchSort::Stars);
+    assert_eq!(state.search_cursor, 0);
+}
+
+#[test]
+fn test_repo_search_sort_modes() {
+    let mut state = AppState::new();
+    state.search_results = make_search_items();
+
+    state.search_filters.sort = RepoSearchSort::Updated;
+    let updated = state.get_filtered_search_results();
+    assert_eq!(updated[0].full_name, "gamma/tool");
+    assert_eq!(updated[1].full_name, "alpha/core");
+
+    state.search_filters.sort = RepoSearchSort::Name;
+    let by_name = state.get_filtered_search_results();
+    assert_eq!(by_name[0].full_name, "alpha/core");
+    assert_eq!(by_name[1].full_name, "gamma/tool");
+}
+
+#[test]
+fn test_cancel_repo_search_invalidates_pending_results() {
+    let mut state = AppState::new();
+    state.search_query_version = 5;
+    state.search_loading = true;
+    state.search_cursor = 2;
+    state.search_results = make_search_items();
+
+    state.cancel_repo_search(false);
+    assert_eq!(state.search_query_version, 6);
+    assert!(!state.search_loading);
+    assert_eq!(state.search_cursor, 0);
+    assert_eq!(state.search_results.len(), 3);
+
+    state.cancel_repo_search(true);
+    assert_eq!(state.search_query_version, 7);
+    assert!(state.search_results.is_empty());
 }

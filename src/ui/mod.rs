@@ -12,7 +12,7 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::github::{GitHubClient, GitHubError, GitHubUrl, RepoItem};
+use crate::github::{GitHubClient, GitHubError, GitHubUrl, RepoItem, SearchItem};
 use crate::ui::components::syntax_highlighting::highlight_content;
 
 pub mod components;
@@ -31,8 +31,45 @@ fn install_panic_hook() {
 pub enum AppMode {
     Input,
     Searching,
+    RepositorySearch,
     Browse,
     Preview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepoSearchSort {
+    Stars,
+    Updated,
+    Name,
+}
+
+impl RepoSearchSort {
+    fn next(self) -> Self {
+        match self {
+            Self::Stars => Self::Updated,
+            Self::Updated => Self::Name,
+            Self::Name => Self::Stars,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RepoSearchFilters {
+    pub include_forks: bool,
+    pub min_stars: u32,
+    pub language: Option<String>,
+    pub sort: RepoSearchSort,
+}
+
+impl Default for RepoSearchFilters {
+    fn default() -> Self {
+        Self {
+            include_forks: false,
+            min_stars: 0,
+            language: None,
+            sort: RepoSearchSort::Stars,
+        }
+    }
 }
 
 pub struct AppState {
@@ -63,6 +100,11 @@ pub struct AppState {
     pub preview_path: String,
     pub preview_loading: bool,
     pub preview_is_image: bool,
+    pub search_results: Vec<SearchItem>,
+    pub search_cursor: usize,
+    pub search_query_version: u64,
+    pub search_loading: bool,
+    pub search_filters: RepoSearchFilters,
 }
 
 impl Default for AppState {
@@ -101,6 +143,11 @@ impl AppState {
             preview_path: String::new(),
             preview_loading: false,
             preview_is_image: false,
+            search_results: Vec::new(),
+            search_cursor: 0,
+            search_query_version: 0,
+            search_loading: false,
+            search_filters: RepoSearchFilters::default(),
         }
     }
 
@@ -219,6 +266,112 @@ impl AppState {
                 .collect()
         }
     }
+
+    pub fn reset_repo_search_filters(&mut self) {
+        self.search_filters = RepoSearchFilters::default();
+        self.search_cursor = 0;
+    }
+
+    pub fn cancel_repo_search(&mut self, clear_results: bool) {
+        self.search_query_version += 1;
+        self.search_loading = false;
+        self.search_cursor = 0;
+        if clear_results {
+            self.search_results.clear();
+        }
+    }
+
+    pub fn get_search_languages(&self) -> Vec<String> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for item in &self.search_results {
+            if let Some(language) = &item.language {
+                *counts.entry(language.clone()).or_insert(0) += 1;
+            }
+        }
+
+        let mut languages: Vec<(String, usize)> = counts.into_iter().collect();
+        languages.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        languages
+            .into_iter()
+            .map(|(language, _)| language)
+            .collect()
+    }
+
+    pub fn cycle_repo_search_language(&mut self) {
+        let languages = self.get_search_languages();
+        if languages.is_empty() {
+            self.search_filters.language = None;
+            self.search_cursor = 0;
+            return;
+        }
+
+        self.search_filters.language = match &self.search_filters.language {
+            None => Some(languages[0].clone()),
+            Some(current) => {
+                if let Some(index) = languages.iter().position(|language| language == current) {
+                    if index + 1 < languages.len() {
+                        Some(languages[index + 1].clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    Some(languages[0].clone())
+                }
+            }
+        };
+        self.search_cursor = 0;
+    }
+
+    pub fn cycle_repo_search_min_stars(&mut self) {
+        self.search_filters.min_stars = match self.search_filters.min_stars {
+            0 => 10,
+            10 => 50,
+            50 => 100,
+            100 => 500,
+            500 => 1000,
+            _ => 0,
+        };
+        self.search_cursor = 0;
+    }
+
+    pub fn get_filtered_search_results(&self) -> Vec<SearchItem> {
+        let mut results: Vec<SearchItem> = self
+            .search_results
+            .iter()
+            .filter(|item| self.search_filters.include_forks || !item.fork)
+            .filter(|item| item.stargazers_count >= self.search_filters.min_stars)
+            .filter(|item| {
+                self.search_filters
+                    .language
+                    .as_ref()
+                    .map(|language| item.language.as_deref() == Some(language.as_str()))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+
+        match self.search_filters.sort {
+            RepoSearchSort::Stars => {
+                results.sort_by(|a, b| {
+                    b.stargazers_count
+                        .cmp(&a.stargazers_count)
+                        .then_with(|| a.full_name.cmp(&b.full_name))
+                });
+            }
+            RepoSearchSort::Updated => {
+                results.sort_by(|a, b| {
+                    b.pushed_at
+                        .cmp(&a.pushed_at)
+                        .then_with(|| b.stargazers_count.cmp(&a.stargazers_count))
+                });
+            }
+            RepoSearchSort::Name => {
+                results.sort_by(|a, b| a.full_name.cmp(&b.full_name));
+            }
+        }
+
+        results
+    }
 }
 
 pub async fn run_tui(
@@ -330,6 +483,19 @@ async fn event_loop(
                             &state_lock.status_message,
                         );
                     }
+                    AppMode::RepositorySearch => {
+                        let filtered_results = state_lock.get_filtered_search_results();
+                        let repo_search_state = components::repo_search::RepoSearchState {
+                            results: &filtered_results,
+                            total_results: state_lock.search_results.len(),
+                            cursor: state_lock.search_cursor,
+                            query: &state_lock.url_input,
+                            filters: &state_lock.search_filters,
+                            loading: state_lock.search_loading,
+                            status_msg: &state_lock.status_message,
+                        };
+                        components::repo_search::render(f, size, &repo_search_state);
+                    }
                     AppMode::Browse => {
                         let filtered_items = state_lock.get_view_items();
 
@@ -423,6 +589,7 @@ async fn handle_input(
                 {
                     s.url_input.clear();
                     s.url_cursor = 0;
+                    s.search_results.clear();
                 } else if s.url_cursor > 0 {
                     let byte_pos = s
                         .url_input
@@ -435,14 +602,16 @@ async fn handle_input(
                 }
             }
             KeyCode::Delete => {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    || key.modifiers.contains(KeyModifiers::ALT)
-                    || key.modifiers.contains(KeyModifiers::SUPER)
-                    || !s.url_input.is_empty()
-                // User said "just del" to remove full URL
-                {
-                    s.url_input.clear();
-                    s.url_cursor = 0;
+                let char_count = s.url_input.chars().count();
+                if s.url_cursor < char_count {
+                    let byte_pos = s
+                        .url_input
+                        .char_indices()
+                        .nth(s.url_cursor)
+                        .map(|(i, _)| i)
+                        .unwrap();
+                    s.url_input.remove(byte_pos);
+                    trigger_search(state.clone(), client.clone());
                 }
             }
             KeyCode::Left => {
@@ -455,36 +624,125 @@ async fn handle_input(
                     s.url_cursor += 1;
                 }
             }
+            KeyCode::Up => {}
+            KeyCode::Down => {}
             KeyCode::Tab => {
                 let target = "https://github.com/";
                 if s.url_input.is_empty()
                     || (target.starts_with(&s.url_input) && s.url_input.len() < target.len())
                 {
+                    s.cancel_repo_search(true);
                     s.url_input = target.to_string();
                     s.url_cursor = s.url_input.chars().count();
                 }
             }
-            KeyCode::Esc => return Ok(true),
+            KeyCode::Esc => {
+                if !s.url_input.is_empty() {
+                    s.cancel_repo_search(true);
+                    s.url_input.clear();
+                    s.url_cursor = 0;
+                } else {
+                    return Ok(true);
+                }
+            }
             KeyCode::Enter => {
                 let url = s.url_input.clone();
-                s.mode = AppMode::Searching;
-                s.status_message = "Parsing URL...".to_string();
 
-                let state_c = state.clone();
-                let client_c = client.clone();
+                if url.is_empty() {
+                    return Ok(false);
+                }
 
-                tokio::spawn(async move {
-                    match GitHubUrl::parse(&url) {
-                        Ok(gh_url) => {
-                            load_repo(state_c, client_c, gh_url).await;
+                if url.starts_with("http") {
+                    s.cancel_repo_search(true);
+                    s.mode = AppMode::Searching;
+                    s.status_message = "Parsing URL...".to_string();
+
+                    let state_c = state.clone();
+                    let client_c = client.clone();
+
+                    tokio::spawn(async move {
+                        match GitHubUrl::parse(&url) {
+                            Ok(gh_url) => {
+                                load_repo(state_c, client_c, gh_url).await;
+                            }
+                            Err(e) => {
+                                let mut s = state_c.lock().await;
+                                s.mode = AppMode::Input;
+                                s.show_toast(format!("Invalid URL: {}", e), ToastType::Error);
+                            }
                         }
-                        Err(e) => {
-                            let mut s = state_c.lock().await;
-                            s.mode = AppMode::Input;
-                            s.show_toast(format!("Invalid URL: {}", e), ToastType::Error);
+                    });
+                } else {
+                    s.mode = AppMode::RepositorySearch;
+                    s.search_results.clear();
+                    s.search_cursor = 0;
+                    s.reset_repo_search_filters();
+                    trigger_search(state.clone(), client.clone());
+                }
+            }
+            _ => {}
+        },
+        AppMode::RepositorySearch => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if !s.get_filtered_search_results().is_empty() && s.search_cursor > 0 {
+                    s.search_cursor -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let visible_count = s.get_filtered_search_results().len();
+                if visible_count > 0 && s.search_cursor < visible_count.saturating_sub(1) {
+                    s.search_cursor += 1;
+                }
+            }
+            KeyCode::Char('f') => {
+                s.search_filters.include_forks = !s.search_filters.include_forks;
+                s.search_cursor = 0;
+            }
+            KeyCode::Char('l') => {
+                s.cycle_repo_search_language();
+            }
+            KeyCode::Char('m') => {
+                s.cycle_repo_search_min_stars();
+            }
+            KeyCode::Char('s') => {
+                s.search_filters.sort = s.search_filters.sort.next();
+                s.search_cursor = 0;
+            }
+            KeyCode::Char('x') => {
+                s.reset_repo_search_filters();
+            }
+            KeyCode::Char('r') => {
+                s.search_results.clear();
+                s.search_cursor = 0;
+                trigger_search(state.clone(), client.clone());
+            }
+            KeyCode::Enter => {
+                let filtered_results = s.get_filtered_search_results();
+                if !filtered_results.is_empty() && s.search_cursor < filtered_results.len() {
+                    let url = filtered_results[s.search_cursor].html_url.clone();
+                    s.mode = AppMode::Searching;
+                    s.status_message = "Parsing URL...".to_string();
+
+                    let state_c = state.clone();
+                    let client_c = client.clone();
+
+                    tokio::spawn(async move {
+                        match GitHubUrl::parse(&url) {
+                            Ok(gh_url) => {
+                                load_repo(state_c, client_c, gh_url).await;
+                            }
+                            Err(e) => {
+                                let mut s = state_c.lock().await;
+                                s.mode = AppMode::Input;
+                                s.show_toast(format!("Invalid URL: {}", e), ToastType::Error);
+                            }
                         }
-                    }
-                });
+                    });
+                }
+            }
+            KeyCode::Esc => {
+                s.cancel_repo_search(false);
+                s.mode = AppMode::Input;
             }
             _ => {}
         },
@@ -1097,4 +1355,63 @@ fn is_video_file(path: &str) -> bool {
         || lower.ends_with(".mkv")
         || lower.ends_with(".avi")
         || lower.ends_with(".webm")
+}
+
+fn trigger_search(state: Arc<Mutex<AppState>>, client: GitHubClient) {
+    tokio::spawn(async move {
+        let current_version = {
+            let mut s = state.lock().await;
+            s.search_query_version += 1;
+            s.search_loading = true;
+            s.status_message = "Searching repositories...".to_string();
+            s.search_query_version
+        };
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        {
+            let s = state.lock().await;
+            if s.search_query_version != current_version {
+                return;
+            }
+            if s.url_input.trim().is_empty() || s.url_input.starts_with("http") {
+                let mut s = state.lock().await;
+                s.search_results.clear();
+                s.search_loading = false;
+                s.status_message.clear();
+                return;
+            }
+        }
+
+        let query = {
+            let s = state.lock().await;
+            s.url_input.clone()
+        };
+
+        match client.search_repositories(&query).await {
+            Ok(results) => {
+                let mut s = state.lock().await;
+                if s.search_query_version == current_version {
+                    s.search_results = results;
+                    s.search_cursor = 0;
+                    s.search_loading = false;
+                    s.status_message = if s.search_results.is_empty() {
+                        "No repositories found for that search.".to_string()
+                    } else {
+                        format!("Loaded {} repositories", s.search_results.len())
+                    };
+                }
+            }
+            Err(e) => {
+                let mut s = state.lock().await;
+                if s.search_query_version == current_version {
+                    s.search_results.clear();
+                    s.search_cursor = 0;
+                    s.search_loading = false;
+                    s.status_message = "Search failed".to_string();
+                    s.show_toast(format!("Search failed: {}", e), ToastType::Error);
+                }
+            }
+        }
+    });
 }

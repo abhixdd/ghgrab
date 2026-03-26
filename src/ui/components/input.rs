@@ -19,19 +19,18 @@ pub fn render(
     let vertical_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(12), // Top padding
-            Constraint::Length(8),      // Header
-            Constraint::Length(2),      // Description
-            Constraint::Length(1),      // Spacing
-            Constraint::Length(3),      // Input box
-            Constraint::Length(1),      // Spacing
-            Constraint::Length(9),      // Instructions & Examples
-            Constraint::Length(2),      // Controls
-            Constraint::Min(0),         // Bottom padding
+            Constraint::Percentage(12),
+            Constraint::Length(8),
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Length(9),
+            Constraint::Length(2),
+            Constraint::Min(0),
         ])
         .split(area);
 
-    // Header area
     let header_area = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -41,7 +40,6 @@ pub fn render(
         ])
         .split(vertical_layout[1]);
 
-    // ASCII Header
     let header_lines = vec![
         Line::from(Span::styled(
             "  ██████╗ ██╗  ██╗ ██████╗ ██████╗  █████╗ ██████╗ ",
@@ -148,7 +146,7 @@ pub fn render(
             Block::default()
                 .borders(Borders::ALL)
                 .title(Span::styled(
-                    " Enter GitHub URL ",
+                    " Enter GitHub URL or Search ",
                     Style::default()
                         .fg(ACCENT_COLOR)
                         .add_modifier(Modifier::BOLD),
