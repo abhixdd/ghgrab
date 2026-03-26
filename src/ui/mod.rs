@@ -37,6 +37,31 @@ pub enum AppMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconMode {
+    Emoji,
+    Ascii,
+    NerdFont,
+}
+
+impl IconMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Emoji => Self::Ascii,
+            Self::Ascii => Self::NerdFont,
+            Self::NerdFont => Self::Emoji,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Emoji => "Emoji Icons",
+            Self::Ascii => "ASCII Icons",
+            Self::NerdFont => "Nerd Font Icons",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoSearchSort {
     Stars,
     Updated,
@@ -85,7 +110,7 @@ pub struct AppState {
     pub navigation_stack: Vec<(GitHubUrl, usize)>,
     pub frame_count: u64,
     pub toast: Option<Toast>,
-    pub ascii_mode: bool,
+    pub icon_mode: IconMode,
     pub github_token: Option<String>,
     pub download_path: Option<String>,
     pub full_tree: Option<Vec<RepoItem>>,
@@ -128,7 +153,7 @@ impl AppState {
             navigation_stack: Vec::new(),
             frame_count: 0,
             toast: None,
-            ascii_mode: false,
+            icon_mode: IconMode::Emoji,
             github_token: None,
             download_path: None,
             full_tree: None,
@@ -506,7 +531,7 @@ async fn event_loop(
                             scroll_offset: state_lock.scroll_offset,
                             status_msg: &state_lock.status_message,
                             is_downloading: state_lock.downloading,
-                            ascii_mode: state_lock.ascii_mode,
+                            icon_mode: state_lock.icon_mode,
                             folder_sizes: &state_lock.folder_sizes,
                             is_searching: state_lock.is_searching,
                             search_query: &state_lock.search_query,
@@ -769,13 +794,9 @@ async fn handle_input(
                     s.status_message = String::new();
                 }
                 KeyCode::Char('i') if !s.is_searching => {
-                    s.ascii_mode = !s.ascii_mode;
-                    let msg = if s.ascii_mode {
-                        "ASCII Icons"
-                    } else {
-                        "Emoji Icons"
-                    };
-                    s.show_toast(msg.to_string(), ToastType::Info);
+                    s.icon_mode = s.icon_mode.next();
+                    let msg = s.icon_mode.as_str().to_string();
+                    s.show_toast(msg, ToastType::Info);
                 }
 
                 KeyCode::Up => s.move_up(),

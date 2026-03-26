@@ -17,7 +17,7 @@ pub struct BrowserState<'a> {
     pub scroll_offset: usize,
     pub status_msg: &'a str,
     pub is_downloading: bool,
-    pub ascii_mode: bool,
+    pub icon_mode: crate::ui::IconMode,
     pub folder_sizes: &'a HashMap<String, u64>,
     pub is_searching: bool,
     pub search_query: &'a str,
@@ -116,16 +116,28 @@ pub fn render(f: &mut Frame, area: Rect, state: &BrowserState) {
         .map(|(idx, item)| {
             let is_selected = idx == state.cursor;
 
-            let icon = if state.ascii_mode {
-                if item.is_dir() {
-                    "[D] "
-                } else {
-                    "[F] "
+            let icon = match state.icon_mode {
+                crate::ui::IconMode::Ascii => {
+                    if item.is_dir() {
+                        "[D] "
+                    } else {
+                        "[F] "
+                    }
                 }
-            } else if item.is_dir() {
-                "📁 "
-            } else {
-                "📄 "
+                crate::ui::IconMode::Emoji => {
+                    if item.is_dir() {
+                        "📁 "
+                    } else {
+                        "📄 "
+                    }
+                }
+                crate::ui::IconMode::NerdFont => {
+                    if item.is_dir() {
+                        "󰉋 "
+                    } else {
+                        "󰈔 "
+                    }
+                }
             };
 
             let mark = if item.selected {
