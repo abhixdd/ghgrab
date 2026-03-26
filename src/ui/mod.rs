@@ -1094,14 +1094,27 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
 
     if let Err(GitHubError::NotFound(_)) = &tree_result {
         if gh_url.branch == "main" {
-            gh_url.branch = "master".to_string();
+            // Try to detect the actual default branch from the API
             {
                 let mut s = state_c.lock().await;
-                s.status_message = "Trying master branch...".to_string();
+                s.status_message = "Detecting default branch...".to_string();
             }
-            tree_result = current_client
-                .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
-                .await;
+            if let Ok(default_branch) = current_client
+                .fetch_default_branch(&gh_url.owner, &gh_url.repo)
+                .await
+            {
+                if default_branch != "main" {
+                    gh_url.branch = default_branch;
+                    {
+                        let mut s = state_c.lock().await;
+                        s.status_message =
+                            format!("Trying {} branch...", gh_url.branch);
+                    }
+                    tree_result = current_client
+                        .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
+                        .await;
+                }
+            }
         }
     }
 

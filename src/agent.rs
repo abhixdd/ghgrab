@@ -221,10 +221,18 @@ async fn load_tree(
 
     if let Err(GitHubError::NotFound(_)) = &tree_result {
         if gh_url.branch == "main" {
-            gh_url.branch = "master".to_string();
-            tree_result = client
-                .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
-                .await;
+            // Try to detect the actual default branch from the API
+            if let Ok(default_branch) = client
+                .fetch_default_branch(&gh_url.owner, &gh_url.repo)
+                .await
+            {
+                if default_branch != "main" {
+                    gh_url.branch = default_branch;
+                    tree_result = client
+                        .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
+                        .await;
+                }
+            }
         }
     }
 

@@ -337,6 +337,26 @@ impl GitHubClient {
         Ok(tree)
     }
 
+    pub async fn fetch_default_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> std::result::Result<String, GitHubError> {
+        let url = format!("https://api.github.com/repos/{}/{}", owner, repo);
+        let response = self.request(reqwest::Method::GET, &url, None).await?;
+
+        #[derive(serde::Deserialize)]
+        struct RepoInfo {
+            default_branch: String,
+        }
+
+        let info: RepoInfo = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+        Ok(info.default_branch)
+    }
+
     pub async fn search_repositories(
         &self,
         query: &str,
