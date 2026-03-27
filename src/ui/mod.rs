@@ -1107,8 +1107,7 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
                     gh_url.branch = default_branch;
                     {
                         let mut s = state_c.lock().await;
-                        s.status_message =
-                            format!("Trying {} branch...", gh_url.branch);
+                        s.status_message = format!("Trying {} branch...", gh_url.branch);
                     }
                     tree_result = current_client
                         .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
