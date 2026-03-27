@@ -1153,10 +1153,8 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
         Err(tree_err) => {
             // Check if the error is a non-recoverable error that should be shown
             // directly, rather than falling back to folder-by-folder navigation
-            let should_fallback = matches!(
-                &tree_err,
-                GitHubError::ApiError(_) | GitHubError::Other(_)
-            );
+            let should_fallback =
+                matches!(&tree_err, GitHubError::ApiError(_) | GitHubError::Other(_));
 
             if !should_fallback {
                 let mut s = state_c.lock().await;
