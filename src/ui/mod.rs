@@ -1151,7 +1151,8 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
             s.status_message = String::new();
             if is_truncated {
                 s.show_toast(
-                    "Warning: Tree was truncated by GitHub API. Some files may be missing.".to_string(),
+                    "Warning: Tree was truncated by GitHub API. Some files may be missing."
+                        .to_string(),
                     ToastType::Warning,
                 );
             } else {
