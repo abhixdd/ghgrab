@@ -1043,10 +1043,7 @@ async fn handle_input(
                                 let mut s = s_clone.lock().await;
                                 s.downloading = false;
                                 s.status_message = String::new();
-                                s.show_toast(
-                                    format!("Download failed: {}", e),
-                                    ToastType::Error,
-                                );
+                                s.show_toast(format!("Download failed: {}", e), ToastType::Error);
                             }
                         });
                     }
