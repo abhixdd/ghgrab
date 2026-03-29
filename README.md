@@ -55,6 +55,13 @@ To have a specific tagged version:
 nix run "github:abhixdd/ghgrab/<tag>"
 ```
 
+### Aur (Arch linux)
+
+```bash
+yay -S ghgrab-bin   
+```
+
+
 ---
 
 ### Quick Start
