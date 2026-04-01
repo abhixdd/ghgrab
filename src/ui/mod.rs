@@ -209,9 +209,14 @@ impl AppState {
     }
 
     fn adjust_scroll(&mut self) {
-        // Subtract space for: breadcrumb (3) + borders (2) + header row (1) + help bar (2)
-        // + optional download status (2) + optional search bar (3)
-        let chrome_height: u16 = 8;
+        // Base chrome: breadcrumb (3) + file list borders (2) + header row (1) + help bar (2)
+        let mut chrome_height: u16 = 8;
+        if self.downloading {
+            chrome_height += 2; // download status bar
+        }
+        if self.is_searching {
+            chrome_height += 3; // search bar with borders
+        }
         let visible_height = (self.terminal_height.saturating_sub(chrome_height)) as usize;
         let visible_height = visible_height.max(1);
         if self.cursor < self.scroll_offset {
