@@ -5,6 +5,9 @@ use ghgrab::config::Config;
 
 use ghgrab::ui;
 
+const GHGRAB_GITHUB_TOKEN_ENV: &str = "GHGRAB_GITHUB_TOKEN";
+const GITHUB_TOKEN_ENV: &str = "GITHUB_TOKEN";
+
 #[derive(Parser)]
 #[command(name = "ghgrab", version, about)]
 struct Cli {
@@ -151,7 +154,7 @@ async fn main() -> Result<()> {
         },
         Some(Commands::Agent { action }) => match action {
             AgentCommand::Tree { url, token } => {
-                let token = token.or(default_config.github_token.clone());
+                let token = resolve_github_token(token, default_config.github_token.clone());
                 let result = agent::fetch_tree(&url, token).await;
                 print_agent_json("tree", result)?;
             }
@@ -165,7 +168,7 @@ async fn main() -> Result<()> {
                 out,
                 token,
             } => {
-                let token = token.or(default_config.github_token.clone());
+                let token = resolve_github_token(token, default_config.github_token.clone());
                 let out = out.or(default_config.download_path.clone());
                 let selected_paths = build_download_request(paths, repo, subtree);
                 let result = match selected_paths {
@@ -183,7 +186,7 @@ async fn main() -> Result<()> {
 
             let download_path = default_config.download_path.clone();
 
-            let token = cli.token.or(default_config.github_token.clone());
+            let token = resolve_github_token(cli.token, default_config.github_token.clone());
             let initial_icon_mode = default_config.icon_mode.unwrap_or(ui::IconMode::Emoji);
 
             let final_icon_mode = ui::run_tui(
@@ -204,6 +207,30 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_github_token(cli_token: Option<String>, config_token: Option<String>) -> Option<String> {
+    normalize_token(cli_token)
+        .or_else(resolve_github_token_from_env)
+        .or_else(|| normalize_token(config_token))
+}
+
+fn resolve_github_token_from_env() -> Option<String> {
+    [GHGRAB_GITHUB_TOKEN_ENV, GITHUB_TOKEN_ENV]
+        .into_iter()
+        .find_map(|key| std::env::var(key).ok())
+        .and_then(|token| normalize_token(Some(token)))
+}
+
+fn normalize_token(token: Option<String>) -> Option<String> {
+    token.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn build_download_request(

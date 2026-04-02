@@ -92,6 +92,15 @@ You can also type a repository keyword on the home screen (for example `ratatui`
 | `--no-folder`     | Downloads files directly without creating a subfolder for the repo.  |
 | `--token <TOKEN>` | Use a specific GitHub token for this run (doesn't save to settings). |
 
+### Environment Variables
+
+`ghgrab` also accepts GitHub tokens from environment variables:
+
+- `GHGRAB_GITHUB_TOKEN`
+- `GITHUB_TOKEN`
+
+
+
 ### Agent Mode
 
 For scripts, agents, and other non-interactive workflows, `ghgrab` includes a machine-friendly `agent` command that prints a stable JSON envelope with `api_version`, `ok`, `command`, and either `data` or `error`.
