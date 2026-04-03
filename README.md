@@ -18,6 +18,7 @@
 - **File Preview**: Preview source code and text files directly in the TUI.
 - **Handles the big stuff**: Built-in support for GitHub LFS (Large File Storage).
 - **Batch mode**: Select a bunch of files and folders to download them all at once.
+- **Release downloads**: Grab GitHub release artifacts with OS/architecture-aware selection.
 
 ---
 
@@ -83,6 +84,30 @@ ghgrab https://github.com/rust-lang/rust --cwd --no-folder
 ```
 
 You can also type a repository keyword on the home screen (for example `ratatui`) and press `Enter` to open repository search mode.
+
+### Release Downloads
+
+You can also download GitHub release assets directly with the user-facing `release` command or its short alias `rel`.
+
+```bash
+# Download the best matching artifact for your OS and architecture
+ghgrab release sharkdp/bat
+
+# Same command with the short alias and short binary name
+ghg rel sharkdp/bat
+
+# Pick a release tag explicitly
+ghgrab rel sharkdp/bat --tag v0.25.0
+
+# Match assets with a regex
+ghgrab rel sharkdp/bat --asset-regex "x86_64.*linux.*tar.gz"
+
+# Extract an archive after download
+ghgrab rel sharkdp/bat --extract
+
+# Install the selected file or extracted binary into a target directory
+ghgrab rel sharkdp/bat --extract --bin-path ~/.local/bin
+```
 
 ### CLI Flags
 

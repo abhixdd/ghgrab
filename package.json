@@ -3,7 +3,8 @@
   "version": "1.2.0",
   "description": "A terminal-based tool for downloading specific files and folders from GitHub repositories",
   "bin": {
-    "ghgrab": "bin/ghgrab.js"
+    "ghgrab": "bin/ghgrab.js",
+    "ghg": "bin/ghgrab.js"
   },
   "scripts": {
     "postinstall": "node scripts/install.js"

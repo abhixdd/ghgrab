@@ -2,6 +2,7 @@
 name = "ghgrab"
 version = "1.2.0"
 edition = "2021"
+default-run = "ghgrab"
 authors = ["abhixdd"]
 description = "A TUI-based tool to download specific files or folders from GitHub repositories"
 license = "MIT"
@@ -24,6 +25,11 @@ thiserror = "1.0"
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "default-fancy"] }
 urlencoding = "2.1"
 toml = "1.1.0"
+regex = "1.11"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1.0"
+xz2 = "0.1"
 
 [dev-dependencies]
 rusty-hook = "0.11.2"

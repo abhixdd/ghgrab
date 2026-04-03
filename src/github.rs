@@ -210,6 +210,22 @@ pub struct SearchItem {
     pub pushed_at: String,
 }
 
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct GitHubRelease {
+    pub tag_name: String,
+    pub draft: bool,
+    pub prerelease: bool,
+    pub assets: Vec<GitHubReleaseAsset>,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct GitHubReleaseAsset {
+    pub name: String,
+    pub browser_download_url: String,
+    pub content_type: Option<String>,
+    pub size: u64,
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct GitTreeEntry {
     pub path: String,
@@ -372,6 +388,20 @@ impl GitHubClient {
             .await
             .map_err(|e| GitHubError::ApiError(e.to_string()))?;
         Ok(result.items)
+    }
+
+    pub async fn fetch_releases(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> std::result::Result<Vec<GitHubRelease>, GitHubError> {
+        let url = format!("https://api.github.com/repos/{}/{}/releases", owner, repo);
+        let response = self.request(reqwest::Method::GET, &url, None).await?;
+        let releases: Vec<GitHubRelease> = response
+            .json()
+            .await
+            .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+        Ok(releases)
     }
 
     // Fetch raw content
