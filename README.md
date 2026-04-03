@@ -146,6 +146,17 @@ ghgrab config unset token
 ghgrab config unset path
 ```
 
+### Theming
+
+ghgrab supports custom color themes via a TOML config file.
+
+- Linux/macOS: `~/.config/ghgrab/theme.toml`
+- Windows: `%APPDATA%\ghgrab\theme.toml`
+
+Any missing key falls back to the default Tokyo Night theme. Colors must use `#RRGGBB` hex format.
+
+See [`examples/theme.toml`](examples/theme.toml) for a complete example.
+
 ### Keyboard Shortcuts (How to move around)
 
 We've kept it pretty standard, but here's a quick cheat sheet:
@@ -193,27 +204,3 @@ If you find a bug, have an idea for a cool new feature, or just want to help out
 ## License
 
 Distributed under the MIT License. It's open, free, and yours to play with. See [LICENSE](LICENSE) for the fine print.
-
-### Theming
-
-ghgrab supports custom color themes via a TOML config file.
-
-**Location:**
-- Linux/macOS: `~/.config/ghgrab/theme.toml`
-- Windows: `%APPDATA%\ghgrab\theme.toml`
-
-Variables can be changed individually — any missing key falls back to the default Tokyo Night color theme. Colors must be in `#RRGGBB` hex format.
-```toml
-bg_color       = "#24283b"   # Main background
-fg_color       = "#c0caf5"   # Primary text
-accent_color   = "#7aa2f7"   # Borders, highlights, active elements
-warning_color  = "#e0af68"   # Warnings
-error_color    = "#f7768e"   # Errors
-success_color  = "#9ece6a"   # Success indicators
-folder_color   = "#82aaff"   # Folder icons
-selected_color = "#ff9e64"   # Selected items
-border_color   = "#565f89"   # Inactive borders
-highlight_bg   = "#292e42"   # Highlighted row background
-```
-
-[`exampletheme.toml`](exampletheme.toml) for a example template.

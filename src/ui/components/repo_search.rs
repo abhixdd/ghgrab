@@ -140,7 +140,10 @@ pub fn render(f: &mut Frame, area: Rect, state: &RepoSearchState) {
     };
 
     let status = Paragraph::new(Line::from(vec![
-        Span::styled(" Search ", Style::default().fg(BG_COLOR()).bg(SUCCESS_COLOR())),
+        Span::styled(
+            " Search ",
+            Style::default().fg(BG_COLOR()).bg(SUCCESS_COLOR()),
+        ),
         Span::raw(" "),
         Span::styled(status_text, Style::default().fg(FG_COLOR())),
     ]))
@@ -155,7 +158,11 @@ pub fn render(f: &mut Frame, area: Rect, state: &RepoSearchState) {
     if state.loading && state.total_results == 0 {
         let loading_widget = Paragraph::new("\nSearching GitHub repositories...")
             .alignment(Alignment::Center)
-            .style(Style::default().fg(FG_COLOR()).add_modifier(Modifier::ITALIC))
+            .style(
+                Style::default()
+                    .fg(FG_COLOR())
+                    .add_modifier(Modifier::ITALIC),
+            )
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -352,7 +359,9 @@ fn build_result_item(width: u16, is_selected: bool, item: &SearchItem) -> ListIt
             Span::raw("  "),
             Span::styled(
                 trimmed_desc,
-                Style::default().fg(FG_COLOR()).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(FG_COLOR())
+                    .add_modifier(Modifier::ITALIC),
             ),
         ]),
         Line::from(meta_spans),

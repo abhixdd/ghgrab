@@ -81,7 +81,9 @@ pub fn render(f: &mut Frame, area: Rect, frame_count: u64, status_msg: &str) {
     };
     let status = Paragraph::new(Span::styled(
         msg,
-        Style::default().fg(FG_COLOR()).add_modifier(Modifier::ITALIC),
+        Style::default()
+            .fg(FG_COLOR())
+            .add_modifier(Modifier::ITALIC),
     ))
     .alignment(Alignment::Center)
     .style(Style::default().bg(BG_COLOR()));

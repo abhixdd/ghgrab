@@ -85,7 +85,9 @@ pub fn render(
 
     let desc_text = Line::from(Span::styled(
         "Download any file or folder from GitHub. No full clones. Just what you need.",
-        Style::default().fg(FG_COLOR()).add_modifier(Modifier::ITALIC),
+        Style::default()
+            .fg(FG_COLOR())
+            .add_modifier(Modifier::ITALIC),
     ));
     let desc = Paragraph::new(desc_text)
         .alignment(Alignment::Center)
@@ -208,7 +210,9 @@ pub fn render(
             ),
             Span::styled(
                 "Works with any public or private GitHub repository",
-                Style::default().fg(FG_COLOR()).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(FG_COLOR())
+                    .add_modifier(Modifier::ITALIC),
             ),
         ]),
     ];

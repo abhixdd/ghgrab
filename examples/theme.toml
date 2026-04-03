@@ -1,0 +1,20 @@
+# ghgrab theme example
+#
+# Place this file at:
+# - Linux/macOS: ~/.config/ghgrab/theme.toml
+# - Windows: %APPDATA%\ghgrab\theme.toml
+#
+# Create the ghgrab directory if it does not exist.
+# All values are optional. Missing keys fall back to the default Tokyo Night colors.
+# Colors must use #RRGGBB hex format.
+
+bg_color = "#24283b" # Main background
+fg_color = "#c0caf5" # Primary text
+accent_color = "#7aa2f7" # Borders, highlights, active elements
+warning_color = "#e0af68" # Warnings
+error_color = "#f7768e" # Errors
+success_color = "#9ece6a" # Success indicators
+folder_color = "#82aaff" # Folder icons
+selected_color = "#ff9e64" # Selected items
+border_color = "#565f89" # Inactive borders
+highlight_bg = "#292e42" # Highlighted row background
