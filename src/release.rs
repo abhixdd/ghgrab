@@ -147,6 +147,21 @@ pub fn parse_repo_reference(value: &str) -> Result<ParsedRepo> {
     })
 }
 
+pub fn select_asset_name_for_request(
+    assets: &[GitHubReleaseAsset],
+    repo: &str,
+    asset_regex: Option<&str>,
+    os: Option<&str>,
+    arch: Option<&str>,
+    file_type: FileTypePreference,
+) -> Result<String> {
+    Ok(
+        select_asset(assets, repo, asset_regex, os, arch, file_type)?
+            .name
+            .clone(),
+    )
+}
+
 fn select_release<'a>(
     releases: &'a [GitHubRelease],
     tag: Option<&str>,
@@ -328,7 +343,9 @@ fn score_asset(
         score -= 30;
     }
     if matches_file_type(&lower, file_type) {
-        score += 15;
+        score += 25;
+    } else if !matches!(file_type, FileTypePreference::Any) {
+        score -= 25;
     }
     if detected_os == "windows" && lower.ends_with(".exe") {
         score += 20;
@@ -543,83 +560,4 @@ fn binary_score(path: &Path, repo: &str) -> i32 {
         score += 20;
     }
     score - path.components().count() as i32
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_owner_repo() {
-        let parsed = parse_repo_reference("owner/repo").unwrap();
-        assert_eq!(parsed.owner, "owner");
-        assert_eq!(parsed.repo, "repo");
-    }
-
-    #[test]
-    fn parses_github_url() {
-        let parsed = parse_repo_reference("https://github.com/owner/repo").unwrap();
-        assert_eq!(parsed.owner, "owner");
-        assert_eq!(parsed.repo, "repo");
-    }
-
-    #[test]
-    fn prefers_matching_asset() {
-        let assets = vec![
-            GitHubReleaseAsset {
-                name: "tool_darwin_arm64.tar.gz".to_string(),
-                browser_download_url: "https://example.com/a".to_string(),
-                content_type: None,
-                size: 10,
-            },
-            GitHubReleaseAsset {
-                name: "tool_linux_x86_64.tar.gz".to_string(),
-                browser_download_url: "https://example.com/b".to_string(),
-                content_type: None,
-                size: 10,
-            },
-        ];
-
-        let selected = select_asset(
-            &assets,
-            "tool",
-            None,
-            Some("linux"),
-            Some("amd64"),
-            FileTypePreference::Archive,
-        )
-        .unwrap();
-
-        assert_eq!(selected.name, "tool_linux_x86_64.tar.gz");
-    }
-
-    #[test]
-    fn filters_auxiliary_assets() {
-        let assets = vec![
-            GitHubReleaseAsset {
-                name: "tool_checksums.txt".to_string(),
-                browser_download_url: "https://example.com/a".to_string(),
-                content_type: None,
-                size: 10,
-            },
-            GitHubReleaseAsset {
-                name: "tool_linux_x86_64.tar.gz".to_string(),
-                browser_download_url: "https://example.com/b".to_string(),
-                content_type: None,
-                size: 10,
-            },
-        ];
-
-        let selected = select_asset(
-            &assets,
-            "tool",
-            Some("linux"),
-            Some("linux"),
-            Some("amd64"),
-            FileTypePreference::Archive,
-        )
-        .unwrap();
-
-        assert_eq!(selected.name, "tool_linux_x86_64.tar.gz");
-    }
 }
