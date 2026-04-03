@@ -3,6 +3,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 use std::fs;
 use std::io::Cursor;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tar::Archive;
 use url::Url;
@@ -48,6 +49,10 @@ pub struct ParsedRepo {
     pub owner: String,
     pub repo: String,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("Release selection cancelled")]
+pub struct ReleaseSelectionCancelled;
 
 pub async fn download_release(request: ReleaseRequest) -> Result<ReleaseDownloadResult> {
     let parsed = parse_repo_reference(&request.repo)?;
@@ -182,14 +187,103 @@ fn select_asset<'a>(
         .context("Invalid asset regex")?;
     let detected_os = normalize_os(os.unwrap_or(std::env::consts::OS));
     let detected_arch = normalize_arch(arch.unwrap_or(std::env::consts::ARCH));
-
-    assets
+    let candidates: Vec<_> = assets
         .iter()
         .filter(|asset| !looks_like_auxiliary(&asset.name))
         .filter(|asset| regex.as_ref().is_none_or(|re| re.is_match(&asset.name)))
-        .max_by_key(|asset| score_asset(&asset.name, repo, detected_os, detected_arch, file_type))
-        .filter(|asset| score_asset(&asset.name, repo, detected_os, detected_arch, file_type) > 0)
-        .ok_or_else(|| anyhow!("No release asset matched the requested criteria"))
+        .map(|asset| {
+            (
+                asset,
+                score_asset(&asset.name, repo, detected_os, detected_arch, file_type),
+            )
+        })
+        .filter(|(_, score)| *score > 0)
+        .collect();
+
+    let mut candidates = candidates;
+    candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name)));
+
+    if candidates.is_empty() {
+        bail!("No release asset matched the requested criteria");
+    }
+
+    if candidates.len() == 1 {
+        return Ok(candidates[0].0);
+    }
+
+    if asset_regex.is_some() || has_clear_best_match(&candidates) {
+        return Ok(candidates[0].0);
+    }
+
+    prompt_for_asset_selection(&candidates)
+}
+
+fn has_clear_best_match(candidates: &[(&GitHubReleaseAsset, i32)]) -> bool {
+    if candidates.len() < 2 {
+        return true;
+    }
+    candidates[0].1 >= candidates[1].1 + 20
+}
+
+fn prompt_for_asset_selection<'a>(
+    candidates: &[(&'a GitHubReleaseAsset, i32)],
+) -> Result<&'a GitHubReleaseAsset> {
+    println!("Multiple release assets matched. Select one:");
+    for (index, (asset, _)) in candidates.iter().enumerate() {
+        println!(
+            "  {}. {} ({})",
+            index + 1,
+            asset.name,
+            format_size(asset.size)
+        );
+    }
+    println!("Type q and press Enter to cancel.");
+
+    loop {
+        print!("Enter a number [1-{}]: ", candidates.len());
+        io::stdout().flush().context("Failed to flush stdout")?;
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .context("Failed to read selection")?;
+
+        let trimmed = input.trim();
+        if trimmed.eq_ignore_ascii_case("q") {
+            return Err(ReleaseSelectionCancelled.into());
+        }
+
+        let Ok(choice) = trimmed.parse::<usize>() else {
+            eprintln!("Invalid selection '{}'. Enter a number.", trimmed);
+            continue;
+        };
+
+        if (1..=candidates.len()).contains(&choice) {
+            return Ok(candidates[choice - 1].0);
+        }
+
+        eprintln!(
+            "Selection out of range. Choose between 1 and {}.",
+            candidates.len()
+        );
+    }
+}
+
+fn format_size(size: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let size_f = size as f64;
+
+    if size_f >= GB {
+        format!("{:.1} GB", size_f / GB)
+    } else if size_f >= MB {
+        format!("{:.1} MB", size_f / MB)
+    } else if size_f >= KB {
+        format!("{:.1} KB", size_f / KB)
+    } else {
+        format!("{} B", size)
+    }
 }
 
 fn normalize_os(value: &str) -> &'static str {
@@ -490,6 +584,36 @@ mod tests {
             &assets,
             "tool",
             None,
+            Some("linux"),
+            Some("amd64"),
+            FileTypePreference::Archive,
+        )
+        .unwrap();
+
+        assert_eq!(selected.name, "tool_linux_x86_64.tar.gz");
+    }
+
+    #[test]
+    fn filters_auxiliary_assets() {
+        let assets = vec![
+            GitHubReleaseAsset {
+                name: "tool_checksums.txt".to_string(),
+                browser_download_url: "https://example.com/a".to_string(),
+                content_type: None,
+                size: 10,
+            },
+            GitHubReleaseAsset {
+                name: "tool_linux_x86_64.tar.gz".to_string(),
+                browser_download_url: "https://example.com/b".to_string(),
+                content_type: None,
+                size: 10,
+            },
+        ];
+
+        let selected = select_asset(
+            &assets,
+            "tool",
+            Some("linux"),
             Some("linux"),
             Some("amd64"),
             FileTypePreference::Archive,

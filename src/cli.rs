@@ -1,6 +1,6 @@
 use crate::agent::{self, AgentEnvelope};
 use crate::config::Config;
-use crate::release::{self, FileTypePreference, ReleaseRequest};
+use crate::release::{self, FileTypePreference, ReleaseRequest, ReleaseSelectionCancelled};
 use crate::ui;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -234,7 +234,7 @@ pub async fn run() -> Result<()> {
             token,
         }) => {
             let token = resolve_github_token(token, default_config.github_token.clone());
-            let result = release::download_release(ReleaseRequest {
+            let result = match release::download_release(ReleaseRequest {
                 repo,
                 tag,
                 include_prerelease: prerelease,
@@ -248,7 +248,15 @@ pub async fn run() -> Result<()> {
                 bin_path,
                 token,
             })
-            .await?;
+            .await
+            {
+                Ok(result) => result,
+                Err(error) if error.downcast_ref::<ReleaseSelectionCancelled>().is_some() => {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
 
             println!("Downloaded release asset: {}", result.asset_name);
             println!("Release tag: {}", result.tag);

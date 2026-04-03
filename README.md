@@ -89,6 +89,8 @@ You can also type a repository keyword on the home screen (for example `ratatui`
 
 You can also download GitHub release assets directly with the user-facing `release` command or its short alias `rel`.
 
+When multiple close asset matches are available, ghgrab shows an interactive picker in the terminal. Type the asset number to continue, or `q` to quit.
+
 ```bash
 # Download the best matching artifact for your OS and architecture
 ghgrab release sharkdp/bat
