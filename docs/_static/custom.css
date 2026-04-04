@@ -1,0 +1,13 @@
+/* Furo-specific polish (works in both light and dark modes). */
+:root {
+  --content-width: 980px;
+}
+
+img {
+  border-radius: 6px;
+}
+
+main table {
+  display: block;
+  overflow-x: auto;
+}
