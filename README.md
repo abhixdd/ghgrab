@@ -62,7 +62,6 @@ nix run "github:abhixdd/ghgrab/<tag>"
 yay -S ghgrab-bin   
 ```
 
-
 ---
 
 ### Quick Start
@@ -87,11 +86,11 @@ You can also type a repository keyword on the home screen (for example `ratatui`
 
 ### CLI Flags
 
-| Flag              | Description                                                          |
-| ----------------- | -------------------------------------------------------------------- |
-| `--cwd`           | Forces download to the current working directory.                    |
-| `--no-folder`     | Downloads files directly without creating a subfolder for the repo.  |
-| `--token <TOKEN>` | Use a specific GitHub token for this run (doesn't save to settings). |
+|Flag|Description|
+|---|---|
+|`--cwd`|Forces download to the current working directory.|
+|`--no-folder`|Downloads files directly without creating a subfolder for the repo.|
+|`--token <TOKEN/AUTO/GH>`|Use a specific GitHub token for this run (doesn't save to settings). `auto`/`gh` uses `gh auth token` at runtime.|
 
 ### Release Downloads
 
@@ -178,7 +177,7 @@ ghgrab rel starship/starship --prerelease
 | `--out <DIR>` | Download into a custom output directory. |
 | `--bin-path <DIR>` | Copy the selected file or extracted binary into the provided directory. |
 | `--cwd` | Download into the current working directory. |
-| `--token <TOKEN>` | Use a one-time GitHub token for this run without saving it. |
+| `--token <TOKEN/AUTO/GH>` | Use a one-time GitHub token for this run without saving it. `auto`/`gh` uses `gh auth token` at runtime. |
 
 ### Release Examples
 
@@ -205,7 +204,18 @@ ghgrab release sharkdp/bat
 - `GHGRAB_GITHUB_TOKEN`
 - `GITHUB_TOKEN`
 
+### Runtime token auto mode
 
+If you already use GitHub CLI, you can avoid manual token copy/paste:
+
+```bash
+ghgrab rel sharkdp/bat --token auto
+ghgrab agent tree https://github.com/rust-lang/rust --token gh
+```
+
+- Uses `gh auth token` at runtime only.
+- Never prints the raw token.
+- If multiple token lines are returned, ghgrab reports this and uses one token.
 
 ### Agent Mode
 

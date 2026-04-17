@@ -4,6 +4,8 @@ use crate::release::{self, FileTypePreference, ReleaseRequest, ReleaseSelectionC
 use crate::ui;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::collections::HashSet;
+use std::process::Command;
 
 const GHGRAB_GITHUB_TOKEN_ENV: &str = "GHGRAB_GITHUB_TOKEN";
 const GITHUB_TOKEN_ENV: &str = "GITHUB_TOKEN";
@@ -22,7 +24,10 @@ pub struct Cli {
     #[arg(long, help = "Download files directly into target without repo folder")]
     no_folder: bool,
 
-    #[arg(long, help = "One-time GitHub token (not stored)")]
+    #[arg(
+        long,
+        help = "One-time GitHub token (not stored). Use `auto`/`gh` to read from GitHub CLI"
+    )]
     token: Option<String>,
 }
 
@@ -59,7 +64,10 @@ enum Commands {
         bin_path: Option<String>,
         #[arg(long, help = "Download files to current directory")]
         cwd: bool,
-        #[arg(long, help = "One-time GitHub token for this run")]
+        #[arg(
+            long,
+            help = "One-time GitHub token for this run. Use `auto`/`gh` to read from GitHub CLI"
+        )]
         token: Option<String>,
     },
 }
@@ -93,7 +101,10 @@ enum UnsetTarget {
 enum AgentCommand {
     Tree {
         url: String,
-        #[arg(long, help = "One-time GitHub token for this run")]
+        #[arg(
+            long,
+            help = "One-time GitHub token for this run. Use `auto`/`gh` to read from GitHub CLI"
+        )]
         token: Option<String>,
     },
     Download {
@@ -110,7 +121,10 @@ enum AgentCommand {
         no_folder: bool,
         #[arg(long, help = "Custom output directory for this run")]
         out: Option<String>,
-        #[arg(long, help = "One-time GitHub token for this run")]
+        #[arg(
+            long,
+            help = "One-time GitHub token for this run. Use `auto`/`gh` to read from GitHub CLI"
+        )]
         token: Option<String>,
     },
 }
@@ -192,7 +206,7 @@ pub async fn run() -> Result<()> {
         },
         Some(Commands::Agent { action }) => match action {
             AgentCommand::Tree { url, token } => {
-                let token = resolve_github_token(token, default_config.github_token.clone());
+                let token = resolve_github_token(token, default_config.github_token.clone())?;
                 let result = agent::fetch_tree(&url, token).await;
                 print_agent_json("tree", result)?;
             }
@@ -206,7 +220,7 @@ pub async fn run() -> Result<()> {
                 out,
                 token,
             } => {
-                let token = resolve_github_token(token, default_config.github_token.clone());
+                let token = resolve_github_token(token, default_config.github_token.clone())?;
                 let out = out.or(default_config.download_path.clone());
                 let selected_paths = build_download_request(paths, repo, subtree);
                 let result = match selected_paths {
@@ -233,7 +247,7 @@ pub async fn run() -> Result<()> {
             cwd,
             token,
         }) => {
-            let token = resolve_github_token(token, default_config.github_token.clone());
+            let token = resolve_github_token(token, default_config.github_token.clone())?;
             let result = match release::download_release(ReleaseRequest {
                 repo,
                 tag,
@@ -268,7 +282,7 @@ pub async fn run() -> Result<()> {
         None => {
             let url = cli.url;
             let download_path = default_config.download_path.clone();
-            let token = resolve_github_token(cli.token, default_config.github_token.clone());
+            let token = resolve_github_token(cli.token, default_config.github_token.clone())?;
             let initial_icon_mode = default_config.icon_mode.unwrap_or(ui::IconMode::Emoji);
 
             let final_icon_mode = ui::run_tui(
@@ -291,10 +305,32 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-fn resolve_github_token(cli_token: Option<String>, config_token: Option<String>) -> Option<String> {
-    normalize_token(cli_token)
-        .or_else(resolve_github_token_from_env)
-        .or_else(|| normalize_token(config_token))
+fn resolve_github_token(
+    cli_token: Option<String>,
+    config_token: Option<String>,
+) -> Result<Option<String>> {
+    if let Some(token) = normalize_token(cli_token) {
+        if is_auto_token_keyword(&token) {
+            return resolve_github_token_from_gh_cli(true);
+        }
+        return Ok(Some(token));
+    }
+
+    if let Some(token) = resolve_github_token_from_env() {
+        if is_auto_token_keyword(&token) {
+            if let Some(auto_token) = resolve_github_token_from_gh_cli(false)? {
+                return Ok(Some(auto_token));
+            }
+        } else {
+            return Ok(Some(token));
+        }
+    }
+
+    if let Some(token) = normalize_token(config_token) {
+        return Ok(Some(token));
+    }
+
+    resolve_github_token_from_gh_cli(false)
 }
 
 fn resolve_github_token_from_env() -> Option<String> {
@@ -313,6 +349,84 @@ fn normalize_token(token: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn is_auto_token_keyword(value: &str) -> bool {
+    value.eq_ignore_ascii_case("auto") || value.eq_ignore_ascii_case("gh")
+}
+
+fn resolve_github_token_from_gh_cli(strict: bool) -> Result<Option<String>> {
+    let output = match Command::new("gh").args(["auth", "token"]).output() {
+        Ok(output) => output,
+        Err(error) => {
+            if strict {
+                anyhow::bail!(
+                    "Failed to execute `gh auth token`: {}. Ensure GitHub CLI is installed and available in PATH.",
+                    error
+                );
+            }
+            return Ok(None);
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr.trim();
+        if strict {
+            if reason.is_empty() {
+                anyhow::bail!(
+                    "`gh auth token` failed. Ensure you are logged in with `gh auth login`."
+                );
+            }
+
+            anyhow::bail!(
+                "`gh auth token` failed: {}. Ensure you are logged in with `gh auth login`.",
+                reason
+            );
+        }
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let tokens = parse_gh_auth_token_stdout(&stdout);
+
+    if tokens.is_empty() {
+        if strict {
+            anyhow::bail!(
+                "No token found in `gh auth token` output. Ensure you are authenticated with GitHub CLI."
+            );
+        }
+        return Ok(None);
+    }
+
+    if tokens.len() == 1 {
+        eprintln!("🔐 Found token via GitHub CLI.");
+    } else {
+        eprintln!(
+            "🔐 Found multiple tokens via GitHub CLI output ({}). Using one token.",
+            tokens.len()
+        );
+    }
+
+    Ok(Some(tokens[0].clone()))
+}
+
+fn parse_gh_auth_token_stdout(stdout: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut tokens = Vec::new();
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if seen.insert(trimmed.to_string()) {
+            tokens.push(trimmed.to_string());
+        }
+    }
+
+    tokens
 }
 
 fn build_download_request(
@@ -348,4 +462,37 @@ fn print_agent_json<T: serde::Serialize>(command: &str, result: anyhow::Result<T
 
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_auto_token_keyword;
+    use super::parse_gh_auth_token_stdout;
+
+    #[test]
+    fn parse_gh_auth_token_stdout_single_token() {
+        let parsed = parse_gh_auth_token_stdout("ghp_single_token\n");
+        assert_eq!(parsed, vec!["ghp_single_token".to_string()]);
+    }
+
+    #[test]
+    fn parse_gh_auth_token_stdout_multiple_tokens() {
+        let parsed = parse_gh_auth_token_stdout("ghp_one\nghp_two\n");
+        assert_eq!(parsed, vec!["ghp_one".to_string(), "ghp_two".to_string()]);
+    }
+
+    #[test]
+    fn parse_gh_auth_token_stdout_deduplicates_tokens() {
+        let parsed = parse_gh_auth_token_stdout("ghp_same\nghp_same\n\n");
+        assert_eq!(parsed, vec!["ghp_same".to_string()]);
+    }
+
+    #[test]
+    fn auto_token_keywords_are_detected_case_insensitively() {
+        assert!(is_auto_token_keyword("auto"));
+        assert!(is_auto_token_keyword("AUTO"));
+        assert!(is_auto_token_keyword("gh"));
+        assert!(is_auto_token_keyword("Gh"));
+        assert!(!is_auto_token_keyword("ghp_123"));
+    }
 }

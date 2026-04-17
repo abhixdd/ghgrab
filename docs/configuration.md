@@ -28,16 +28,18 @@ ghgrab config unset path
 
 You can provide a token in three ways:
 
-1. with `--token <TOKEN>` for a single command,
+1. with `--token <TOKEN|auto|gh>` for a single command,
 2. with a saved config token,
 3. with an environment variable.
+
+When `--token auto` or `--token gh` is used, `ghgrab` calls `gh auth token` at runtime and uses that token for the current run only (it is not saved).
 
 Supported environment variables:
 
 - `GHGRAB_GITHUB_TOKEN`
 - `GITHUB_TOKEN`
 
-The command-line flag takes precedence over environment variables, and environment variables take precedence over saved config.
+The command-line flag takes precedence over environment variables, and environment variables take precedence over saved config. If no token is found, `ghgrab` may attempt GitHub CLI token discovery as a runtime fallback.
 
 ## Download destination
 

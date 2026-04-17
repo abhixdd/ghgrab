@@ -14,7 +14,7 @@ ghgrab [URL] [--cwd] [--no-folder] [--token TOKEN]
 | --- | --- |
 | `--cwd` | Download files to the current working directory |
 | `--no-folder` | Download directly into the target directory without a repository subfolder |
-| `--token <TOKEN>` | Use a one-time GitHub token without storing it |
+| `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token without storing it. `auto`/`gh` uses `gh auth token` at runtime |
 
 ## Release downloads
 
@@ -60,7 +60,7 @@ ghgrab rel sharkdp/bat --extract --bin-path ~/.local/bin
 | `--out <DIR>` | Use a custom output directory |
 | `--bin-path <DIR>` | Install the selected file or binary into the provided directory |
 | `--cwd` | Download into the current working directory |
-| `--token <TOKEN>` | Use a one-time GitHub token for this run |
+| `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token for this run. `auto`/`gh` uses `gh auth token` at runtime |
 
 ### Selection behavior
 
@@ -114,7 +114,7 @@ ghgrab agent download https://github.com/rust-lang/rust --repo --out ./tmp
 
 | Flag | Description |
 | --- | --- |
-| `--token <TOKEN>` | Use a one-time GitHub token |
+| `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token. `auto`/`gh` uses `gh auth token` at runtime |
 
 #### `agent download`
 
@@ -125,7 +125,7 @@ ghgrab agent download https://github.com/rust-lang/rust --repo --out ./tmp
 | `--cwd` | Download into the current working directory |
 | `--no-folder` | Skip the repository subfolder |
 | `--out <DIR>` | Use a custom output directory |
-| `--token <TOKEN>` | Use a one-time GitHub token |
+| `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token. `auto`/`gh` uses `gh auth token` at runtime |
 
 ## Configuration
 
@@ -140,3 +140,18 @@ ghgrab config unset path
 ```
 
 `config list` masks stored tokens before printing them.
+
+### Runtime token auto-detection (no save)
+
+If you do not want to store a token, use:
+
+```bash
+ghgrab rel sharkdp/bat --token auto
+ghgrab agent tree https://github.com/rust-lang/rust --token gh
+```
+
+Behavior:
+
+- Uses `gh auth token` at runtime only.
+- Never prints the raw token.
+- If multiple token lines are returned, `ghgrab` reports that multiple tokens were found and uses one token.
