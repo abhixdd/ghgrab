@@ -657,16 +657,13 @@ async fn handle_input(
                     trigger_search(state.clone(), client.clone());
                 }
             }
-            KeyCode::Left => {
-                if s.url_cursor > 0 {
-                    s.url_cursor -= 1;
-                }
+            KeyCode::Left if s.url_cursor > 0 => {
+                s.url_cursor -= 1;
             }
-            KeyCode::Right => {
-                if s.url_cursor < s.url_input.chars().count() {
-                    s.url_cursor += 1;
-                }
+            KeyCode::Right if s.url_cursor < s.url_input.chars().count() => {
+                s.url_cursor += 1;
             }
+            KeyCode::Left | KeyCode::Right => {}
             KeyCode::Up => {}
             KeyCode::Down => {}
             KeyCode::Tab => {
@@ -726,11 +723,12 @@ async fn handle_input(
             _ => {}
         },
         AppMode::RepositorySearch => match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if !s.get_filtered_search_results().is_empty() && s.search_cursor > 0 {
-                    s.search_cursor -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('k')
+                if !s.get_filtered_search_results().is_empty() && s.search_cursor > 0 =>
+            {
+                s.search_cursor -= 1;
             }
+            KeyCode::Up | KeyCode::Char('k') => {}
             KeyCode::Down | KeyCode::Char('j') => {
                 let visible_count = s.get_filtered_search_results().len();
                 if visible_count > 0 && s.search_cursor < visible_count.saturating_sub(1) {
