@@ -58,7 +58,7 @@ ghgrab rel sharkdp/bat --extract --bin-path ~/.local/bin
 | `--file-type <TYPE>` | Prefer `any`, `archive`, or `binary` assets |
 | `--extract` | Extract archive assets after download |
 | `--out <DIR>` | Use a custom output directory |
-| `--bin-path <DIR>` | Install the selected file or binary into the provided directory |
+| `--bin-path <DIR>` | Install the selected file or binary into the provided directory (use `--extract` for archive assets) |
 | `--cwd` | Download into the current working directory |
 | `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token for this run. `auto`/`gh` uses `gh auth token` at runtime |
 

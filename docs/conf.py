@@ -5,7 +5,7 @@ from pathlib import Path
 project = "GhGrab"
 author = "abhixdd"
 copyright = "2026, abhixdd"
-release = "1.3.1"
+release = "1.3.2"
 version = release
 
 extensions = [

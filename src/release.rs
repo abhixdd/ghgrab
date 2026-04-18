@@ -88,12 +88,29 @@ pub async fn download_release(request: ReleaseRequest) -> Result<ReleaseDownload
         .with_context(|| format!("Failed to write asset to '{}'", download_path.display()))?;
 
     let mut installed_binary = None;
-    let extracted = request.extract && is_archive(&asset.name);
+    let extracted = should_extract_asset(request.extract, &asset.name);
 
     if extracted {
-        extract_archive(&download_path, &base_dir)?;
+        let extract_root = build_extract_root(&base_dir, &asset.name);
+        if extract_root.exists() {
+            fs::remove_dir_all(&extract_root).with_context(|| {
+                format!(
+                    "Failed to clean previous extraction directory '{}'",
+                    extract_root.display()
+                )
+            })?;
+        }
+        fs::create_dir_all(&extract_root).with_context(|| {
+            format!(
+                "Failed to create extraction directory '{}'",
+                extract_root.display()
+            )
+        })?;
+
+        extract_archive(&download_path, &extract_root)?;
         if let Some(bin_dir) = request.bin_path.as_deref() {
-            let installed = install_best_binary(&base_dir, &PathBuf::from(bin_dir), &parsed.repo)?;
+            let installed =
+                install_best_binary(&extract_root, &PathBuf::from(bin_dir), &parsed.repo)?;
             installed_binary = Some(installed.display().to_string());
         }
     } else if let Some(bin_dir) = request.bin_path.as_deref() {
@@ -416,6 +433,24 @@ fn is_archive(name: &str) -> bool {
         || lower.ends_with(".tar.xz")
 }
 
+fn should_extract_asset(extract_flag: bool, asset_name: &str) -> bool {
+    extract_flag && is_archive(asset_name)
+}
+
+fn build_extract_root(base_dir: &Path, asset_name: &str) -> PathBuf {
+    let sanitized: String = asset_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    base_dir.join(format!(".ghgrab-extract-{}", sanitized))
+}
+
 fn resolve_base_dir(output_path: Option<String>, cwd: bool) -> Result<PathBuf> {
     if cwd {
         std::env::current_dir().map_err(Into::into)
@@ -540,6 +575,19 @@ fn is_probable_binary(path: &Path) -> bool {
     {
         return false;
     }
+    if is_archive(&name)
+        || [".deb", ".rpm", ".apk"]
+            .iter()
+            .any(|ext| name.ends_with(ext))
+        || [
+            ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".sha256", ".sha512", ".sig",
+            ".asc", ".1", ".ps1", ".bash", ".fish", ".zsh",
+        ]
+        .iter()
+        .any(|ext| name.ends_with(ext))
+    {
+        return false;
+    }
     if cfg!(windows) {
         return name.ends_with(".exe");
     }
@@ -560,4 +608,72 @@ fn binary_score(path: &Path, repo: &str) -> i32 {
         score += 20;
     }
     score - path.components().count() as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "ghgrab-{}-{}-{}",
+            prefix,
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    #[test]
+    fn probable_binary_rejects_archives() {
+        assert!(!is_probable_binary(Path::new(
+            "bat-v0.26.1-x86_64-unknown-linux-gnu.tar.gz"
+        )));
+        assert!(!is_probable_binary(Path::new("tool.zip")));
+        assert!(!is_probable_binary(Path::new("tool.tgz")));
+    }
+
+    #[test]
+    fn extraction_requires_explicit_extract_flag() {
+        assert!(!should_extract_asset(
+            false,
+            "tool-v1.0.0-linux-amd64.tar.gz"
+        ));
+        assert!(should_extract_asset(true, "tool-v1.0.0-linux-amd64.tar.gz"));
+        assert!(!should_extract_asset(true, "tool-v1.0.0-linux-amd64"));
+    }
+
+    #[test]
+    fn install_best_binary_ignores_archive_file() -> Result<()> {
+        let extract_root = temp_dir("extract-root");
+        let bin_dir = temp_dir("bin-dir");
+        fs::create_dir_all(&extract_root)?;
+        fs::create_dir_all(&bin_dir)?;
+
+        let archive_path = extract_root.join("tool-v1.0.0-x86_64-unknown-linux-gnu.tar.gz");
+        fs::write(&archive_path, b"pretend archive bytes")?;
+
+        let nested = extract_root.join("tool-v1.0.0-x86_64-unknown-linux-gnu");
+        fs::create_dir_all(&nested)?;
+        let binary_name = if cfg!(windows) { "tool.exe" } else { "tool" };
+        let binary_path = nested.join(binary_name);
+        fs::write(&binary_path, b"binary bytes")?;
+
+        let installed = install_best_binary(&extract_root, &bin_dir, "tool")?;
+        assert_eq!(
+            installed.file_name().and_then(|f| f.to_str()),
+            Some(binary_name)
+        );
+
+        let _ = fs::remove_dir_all(&extract_root);
+        let _ = fs::remove_dir_all(&bin_dir);
+        Ok(())
+    }
 }

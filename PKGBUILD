@@ -1,6 +1,6 @@
 # Maintainer: Abhinav A 
 pkgname=ghgrab
-pkgver=1.3.1
+pkgver=1.3.2
 pkgrel=1
 pkgdesc="Download specific files and folders from GitHub repositories without cloning"
 arch=('x86_64')
