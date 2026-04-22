@@ -229,7 +229,7 @@ fn select_asset<'a>(
                 score_asset(&asset.name, repo, detected_os, detected_arch, file_type),
             )
         })
-        .filter(|(_, score)| *score > 0)
+        .filter(|(_, score)| asset_regex.is_some() || *score > 0)
         .collect();
 
     let mut candidates = candidates;
@@ -613,6 +613,7 @@ fn binary_score(path: &Path, repo: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::GitHubReleaseAsset;
     use anyhow::Result;
     use std::fs;
     use std::path::PathBuf;
@@ -629,6 +630,51 @@ mod tests {
             std::process::id(),
             nanos
         ))
+    }
+
+    fn asset(name: &str, size: u64) -> GitHubReleaseAsset {
+        GitHubReleaseAsset {
+            name: name.to_string(),
+            browser_download_url: format!("https://example.com/{}", name),
+            content_type: None,
+            size,
+        }
+    }
+
+    #[test]
+    fn select_asset_name_respects_regex_even_when_score_is_low() -> Result<()> {
+        let assets = vec![
+            asset("WinDirStat.zip", 1_000),
+            asset("WinDirStat-x64.msi", 2_000),
+        ];
+
+        let selected = select_asset_name_for_request(
+            &assets,
+            "windirstat",
+            Some(r"^WinDirStat\.zip$"),
+            Some("windows"),
+            Some("amd64"),
+            FileTypePreference::Archive,
+        )?;
+
+        assert_eq!(selected, "WinDirStat.zip");
+        Ok(())
+    }
+
+    #[test]
+    fn select_asset_name_without_regex_still_rejects_low_scores() {
+        let assets = vec![asset("WinDirStat.zip", 1_000)];
+
+        let result = select_asset_name_for_request(
+            &assets,
+            "windirstat",
+            None,
+            Some("windows"),
+            Some("amd64"),
+            FileTypePreference::Archive,
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]
