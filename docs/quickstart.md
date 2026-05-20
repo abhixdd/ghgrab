@@ -10,14 +10,21 @@ ghgrab
 
 From the home screen you can:
 
-- paste a GitHub repository URL,
+- paste a repository URL from a supported forge,
 - type a repository keyword and press `Enter` to search GitHub,
 - jump straight into browsing and downloading.
+
+Supported repository URLs include GitHub, GitLab, Codeberg, Gitea, and Forgejo.
 
 ## Open a repository directly
 
 ```bash
 ghgrab https://github.com/rust-lang/rust
+```
+
+```bash
+ghgrab https://gitlab.com/gitlab-org/gitlab
+ghgrab https://codeberg.org/forgejo/forgejo
 ```
 
 ## Download into the current directory
@@ -35,6 +42,8 @@ ghgrab rel sharkdp/bat
 ```
 
 This selects the best matching asset for the current OS and architecture when there is a clear winner.
+
+Release downloads are currently GitHub-only.
 
 ## Keyboard shortcuts
 
@@ -77,3 +86,5 @@ This selects the best matching asset for the current OS and architecture when th
 | `x` | Reset filters |
 | `r` | Refresh the current search |
 | `Esc` | Return to the home input |
+
+Repository search mode currently searches GitHub only. Use a direct URL to open GitLab, Codeberg, Gitea, or Forgejo repositories.

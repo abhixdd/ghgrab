@@ -2,6 +2,8 @@
 
 `ghgrab` supports interactive usage and three command groups: `release`, `agent`, and `config`.
 
+Repository URLs for the main TUI flow and `agent` commands can target GitHub, GitLab, Codeberg, Gitea, Forgejo, and compatible self-hosted instances unless noted otherwise below.
+
 ## Base command
 
 ```bash
@@ -16,6 +18,8 @@ ghgrab [URL] [--cwd] [--no-folder] [--token TOKEN]
 | `--no-folder` | Download directly into the target directory without a repository subfolder |
 | `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token without storing it. `auto`/`gh` uses `gh auth token` at runtime |
 
+Typing a keyword at the TUI home screen opens repository search mode. That search flow currently uses GitHub only.
+
 ## Release downloads
 
 The `release` command, with alias `rel`, downloads release assets from a repository:
@@ -23,6 +27,8 @@ The `release` command, with alias `rel`, downloads release assets from a reposit
 ```bash
 ghgrab rel <owner/repo> [OPTIONS]
 ```
+
+This command is currently GitHub-only.
 
 ### Common examples
 
@@ -82,12 +88,18 @@ The `agent` command is designed for non-interactive tooling. It prints a stable 
 
 ```bash
 ghgrab agent tree https://github.com/rust-lang/rust
+
+# GitLab also works
+ghgrab agent tree https://gitlab.com/gitlab-org/gitlab
 ```
 
 ### Download specific paths
 
 ```bash
 ghgrab agent download https://github.com/rust-lang/rust src/tools README.md --out ./tmp
+
+# Codeberg / Forgejo / Gitea URLs also work
+ghgrab agent download https://codeberg.org/forgejo/forgejo cmd --out ./tmp
 ```
 
 ### Download a subtree

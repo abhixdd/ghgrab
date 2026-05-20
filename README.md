@@ -1,12 +1,12 @@
 # ghgrab - "grab anything you want"
 
-> A simple, pretty terminal tool that lets you search and download files from GitHub without leaving your CLI.
+> A simple, pretty terminal tool that lets you browse and download files from GitHub, GitLab, Codeberg, Gitea, and Forgejo without leaving your CLI.
 
 ![Rust](https://img.shields.io/badge/rust-1.70%20%7C%201.75%20%7C%20stable-blue) ![crates.io](https://img.shields.io/crates/v/ghgrab.svg?color=blue) ![npm version](https://img.shields.io/npm/v/@ghgrab/ghgrab.svg?color=blue) ![PyPI version](https://img.shields.io/pypi/v/ghgrab.svg?color=blue) ![license](https://img.shields.io/badge/license-MIT-blue)
 
 ![ghgrab demo](assets/ghgrab.gif)
 
-**ghgrab** provides a streamlined command-line interface for cherry-picking specific files or folders from any GitHub repository, powered by the Rust `tokio` and `ratatui` ecosystem. Focused on speed and ease of use, it offers a beautiful TUI that lets you grab exactly what you need; all without the wait times of a full `git clone`.
+**ghgrab** provides a streamlined command-line interface for cherry-picking specific files or folders from supported Git forges, powered by the Rust `tokio` and `ratatui` ecosystem. Focused on speed and ease of use, it offers a beautiful TUI that lets you grab exactly what you need without the wait times of a full `git clone`.
 
 ## Why use ghgrab?
 
@@ -19,6 +19,13 @@
 - **Handles the big stuff**: Built-in support for GitHub LFS (Large File Storage).
 - **Batch mode**: Select a bunch of files and folders to download them all at once.
 - **Release downloads**: Grab GitHub release artifacts with OS/architecture-aware selection.
+
+## Supported platforms
+
+- Repository browsing and file or folder downloads: GitHub, GitLab, Codeberg, Gitea, Forgejo, and compatible self-hosted instances.
+- TUI quick repository search from the home screen: GitHub only.
+- `release` / `rel` downloads: GitHub only.
+- GitHub LFS resolution: GitHub only.
 
 ---
 
@@ -78,6 +85,12 @@ Or, if you already have a link, just paste it in:
 # Browse a repository
 ghgrab https://github.com/rust-lang/rust
 
+# Browse GitLab
+ghgrab https://gitlab.com/gitlab-org/gitlab
+
+# Browse Codeberg / Forgejo / Gitea
+ghgrab https://codeberg.org/forgejo/forgejo
+
 # Download to current directory directly
 ghgrab https://github.com/rust-lang/rust --cwd --no-folder
 ```
@@ -95,6 +108,8 @@ You can also type a repository keyword on the home screen (for example `ratatui`
 ### Release Downloads
 
 You can also download GitHub release assets directly with the user-facing `release` command or its short alias `rel`.
+
+The `release` command is currently GitHub-only even though normal repository browsing and file downloads support multiple forges.
 
 Basic examples:
 
@@ -224,6 +239,9 @@ For scripts, agents, and other non-interactive workflows, `ghgrab` includes a ma
 ```bash
 # Fetch the repository tree as JSON
 ghgrab agent tree https://github.com/rust-lang/rust
+
+# GitLab also works in agent mode for tree and download operations
+ghgrab agent tree https://gitlab.com/gitlab-org/gitlab
 
 # Fetch the repository tree with an explicit token for scripts or agents
 ghgrab agent tree https://github.com/rust-lang/rust --token YOUR_TOKEN

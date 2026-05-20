@@ -1,16 +1,23 @@
 # Overview
 
-`ghgrab` helps you pull individual files, folders, or release artifacts from GitHub without cloning an entire repository.
+`ghgrab` helps you pull individual files, folders, or release artifacts from supported Git forges without cloning an entire repository.
 
 ## What it does well
 
 - Browse repositories in a full-screen terminal UI.
-- Open a repository directly from a GitHub URL.
+- Open a repository directly from a GitHub, GitLab, Codeberg, Gitea, or Forgejo URL.
 - Search for repositories from the home screen.
 - Preview text and source files before downloading.
 - Select multiple files or folders and download them in one run.
 - Download GitHub release assets with OS and architecture-aware matching.
 - Expose machine-readable commands for scripts and agent workflows.
+
+## Platform support
+
+- Repository browsing and file or folder downloads: GitHub, GitLab, Codeberg, Gitea, Forgejo, and compatible self-hosted instances.
+- TUI quick repository search from the home screen: GitHub only.
+- Release downloads with `ghgrab release` / `ghgrab rel`: GitHub only.
+- GitHub LFS detection and download resolution: GitHub only.
 
 ## Why use it
 
@@ -21,7 +28,7 @@ That is useful when you want to:
 - inspect examples from a large repository,
 - grab one directory into an existing project,
 - download a binary release quickly,
-- automate GitHub file retrieval from CI or agent tooling.
+- automate file retrieval from CI or agent tooling.
 
 ## Distribution options
 

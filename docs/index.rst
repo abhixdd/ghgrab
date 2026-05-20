@@ -1,9 +1,11 @@
 ghgrab - grab anything you want
 ===============================
 
-``ghgrab`` is a terminal-first tool for browsing GitHub repositories and downloading only the files, folders, or release assets you need.
+``ghgrab`` is a terminal-first tool for browsing repositories across GitHub, GitLab, Codeberg, Gitea, and Forgejo, and for downloading only the files, folders, or release assets you need.
 
 It combines an interactive TUI for exploration with direct CLI commands for automation-friendly workflows.
+
+Repository browsing and path downloads support multiple forges. TUI repository search and release downloads currently remain GitHub-only.
 
 .. toctree::
    :maxdepth: 2

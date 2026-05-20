@@ -24,7 +24,7 @@ ghgrab config unset token
 ghgrab config unset path
 ```
 
-## GitHub authentication
+## Authentication
 
 You can provide a token in three ways:
 
@@ -41,6 +41,8 @@ Supported environment variables:
 
 The command-line flag takes precedence over environment variables, and environment variables take precedence over saved config. If no token is found, `ghgrab` may attempt GitHub CLI token discovery as a runtime fallback.
 
+The saved config field and environment variable names are still GitHub-oriented for backward compatibility, but the `--token` flag itself is also used for GitLab, Gitea, Forgejo, and Codeberg requests when those servers require authentication.
+
 ## Download destination
 
 You can control where files are written by using:
@@ -53,8 +55,14 @@ Use `--no-folder` when you want downloaded paths placed directly in the target d
 
 ## When a token helps
 
-GitHub token support is especially useful when:
+Token support is especially useful when:
 
 - you hit anonymous API rate limits,
 - you are scripting against private repositories that your token can access,
 - you want more reliable automation in CI or agent workflows.
+
+Notes:
+
+- `gh auth token` auto-discovery is GitHub CLI based, so it is mainly useful for GitHub workflows.
+- TUI repository search still uses GitHub search only.
+- Release downloads still use GitHub releases only.
