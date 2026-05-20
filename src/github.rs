@@ -2,25 +2,75 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use url::Url;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Platform {
+    GitHub,
+    Gitea(String),
+    GitLab(String),
+}
+
+impl Platform {
+    fn detect(host: &str, segments: &[&str]) -> Self {
+        match host {
+            "github.com" => Platform::GitHub,
+            "gitlab.com" => Platform::GitLab("gitlab.com".to_string()),
+            "codeberg.org" => Platform::Gitea("codeberg.org".to_string()),
+            h => {
+                if segments.len() >= 3 && segments[2] == "-" {
+                    Platform::GitLab(h.to_string())
+                } else {
+                    Platform::Gitea(h.to_string())
+                }
+            }
+        }
+    }
+
+    pub fn is_github(&self) -> bool {
+        matches!(self, Platform::GitHub)
+    }
+
+    pub fn is_gitea(&self) -> bool {
+        matches!(self, Platform::Gitea(_))
+    }
+
+    pub fn is_gitlab(&self) -> bool {
+        matches!(self, Platform::GitLab(_))
+    }
+
+    pub fn host(&self) -> &str {
+        match self {
+            Platform::GitHub => "github.com",
+            Platform::Gitea(h) | Platform::GitLab(h) => h,
+        }
+    }
+
+    fn auth_value(&self, token: &str) -> String {
+        match self {
+            Platform::GitLab(_) => format!("Bearer {}", token),
+            _ => format!("token {}", token),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GitHubUrl {
     pub owner: String,
     pub repo: String,
     pub branch: String,
     pub path: String,
+    pub platform: Platform,
 }
 
 impl GitHubUrl {
     pub fn parse(url_str: &str) -> Result<Self> {
         let url = Url::parse(url_str).context("Invalid URL format")?;
 
-        if url.host_str() != Some("github.com") {
-            return Err(anyhow!("Not a GitHub URL"));
-        }
+        let host = url.host_str().ok_or_else(|| anyhow!("URL has no host"))?;
 
         let path_segments: Vec<&str> = url
             .path_segments()
             .ok_or_else(|| anyhow!("Invalid URL path"))?
+            .filter(|s| !s.is_empty())
             .collect();
 
         if path_segments.len() < 2 {
@@ -28,28 +78,102 @@ impl GitHubUrl {
         }
 
         let owner = path_segments[0].to_string();
-        let repo = path_segments[1].to_string();
+        let repo = path_segments[1].trim_end_matches(".git").to_string();
 
-        let (branch, path) = if path_segments.len() >= 4
-            && (path_segments[2] == "tree" || path_segments[2] == "blob")
-        {
-            let branch = path_segments[3].to_string();
-            let path = if path_segments.len() > 4 {
-                path_segments[4..].join("/")
-            } else {
-                String::new()
-            };
-            (branch, path)
-        } else {
-            ("main".to_string(), String::new())
-        };
+        let platform = Platform::detect(host, &path_segments);
+
+        let (branch, path) = Self::parse_branch_and_path(&platform, &path_segments);
 
         Ok(GitHubUrl {
             owner,
             repo,
             branch,
             path,
+            platform,
         })
+    }
+
+    fn parse_branch_and_path(platform: &Platform, segments: &[&str]) -> (String, String) {
+        match platform {
+            Platform::GitHub => {
+                if segments.len() >= 4 && (segments[2] == "tree" || segments[2] == "blob") {
+                    let branch = segments[3].to_string();
+                    let path = if segments.len() > 4 {
+                        segments[4..].join("/")
+                    } else {
+                        String::new()
+                    };
+                    (branch, path)
+                } else {
+                    ("main".to_string(), String::new())
+                }
+            }
+            Platform::Gitea(_) => {
+                if segments.len() >= 5 && segments[2] == "src" {
+                    let branch = segments[4].to_string();
+                    let path = if segments.len() > 5 {
+                        segments[5..].join("/")
+                    } else {
+                        String::new()
+                    };
+                    (branch, path)
+                } else {
+                    ("main".to_string(), String::new())
+                }
+            }
+            Platform::GitLab(_) => {
+                if segments.len() >= 5
+                    && segments[2] == "-"
+                    && (segments[3] == "tree" || segments[3] == "blob")
+                {
+                    let branch = segments[4].to_string();
+                    let path = if segments.len() > 5 {
+                        segments[5..].join("/")
+                    } else {
+                        String::new()
+                    };
+                    (branch, path)
+                } else {
+                    ("main".to_string(), String::new())
+                }
+            }
+        }
+    }
+
+    pub fn ambiguous_ref_candidates(&self) -> Vec<Self> {
+        if self.path.is_empty() {
+            return Vec::new();
+        }
+
+        let path_segments: Vec<&str> = self
+            .path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+
+        if path_segments.is_empty() {
+            return Vec::new();
+        }
+
+        let mut candidates = Vec::with_capacity(path_segments.len());
+        for split_idx in 1..=path_segments.len() {
+            let branch_suffix = path_segments[..split_idx].join("/");
+            let remaining_path = if split_idx < path_segments.len() {
+                path_segments[split_idx..].join("/")
+            } else {
+                String::new()
+            };
+
+            candidates.push(Self {
+                owner: self.owner.clone(),
+                repo: self.repo.clone(),
+                branch: format!("{}/{}", self.branch, branch_suffix),
+                path: remaining_path,
+                platform: self.platform.clone(),
+            });
+        }
+
+        candidates
     }
 
     pub fn get_local_git_remote() -> Option<String> {
@@ -62,13 +186,13 @@ impl GitHubUrl {
         if output.status.success() {
             let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !url.is_empty() {
-                if url.starts_with("git@github.com:") {
-                    let path = url
-                        .trim_start_matches("git@github.com:")
-                        .trim_end_matches(".git");
-                    return Some(format!("https://github.com/{}", path));
+                if let Some(rest) = url.strip_prefix("git@") {
+                    let rest = rest.trim_end_matches(".git");
+                    if let Some((host, path)) = rest.split_once(':') {
+                        return Some(format!("https://{}/{}", host, path));
+                    }
                 }
-                if url.contains("github.com") && url.ends_with(".git") {
+                if url.ends_with(".git") {
                     return Some(url.trim_end_matches(".git").to_string());
                 }
                 return Some(url);
@@ -78,14 +202,61 @@ impl GitHubUrl {
     }
 
     pub fn api_url(&self) -> String {
-        let base = format!(
-            "https://api.github.com/repos/{}/{}/contents",
-            self.owner, self.repo
-        );
-        if self.path.is_empty() {
-            format!("{}?ref={}", base, self.branch)
-        } else {
-            format!("{}/{}?ref={}", base, self.path, self.branch)
+        self.contents_api_url_for_path(&self.path)
+    }
+
+    pub fn contents_api_url_for_path(&self, path: &str) -> String {
+        let norm = path.replace('\\', "/");
+        let norm = norm.trim_matches('/');
+        match &self.platform {
+            Platform::GitHub => {
+                let base = format!(
+                    "https://api.github.com/repos/{}/{}/contents",
+                    self.owner, self.repo
+                );
+                if norm.is_empty() {
+                    format!("{}?ref={}", base, self.branch)
+                } else {
+                    format!("{}/{}?ref={}", base, norm, self.branch)
+                }
+            }
+            Platform::Gitea(host) => {
+                let base = format!(
+                    "https://{}/api/v1/repos/{}/{}/contents",
+                    host, self.owner, self.repo
+                );
+                if norm.is_empty() {
+                    format!("{}?ref={}", base, self.branch)
+                } else {
+                    format!("{}/{}?ref={}", base, norm, self.branch)
+                }
+            }
+            Platform::GitLab(host) => {
+                let project_str = format!("{}/{}", self.owner, self.repo);
+                let project = urlencoding::encode(&project_str);
+                let path_enc = urlencoding::encode(norm).to_string();
+                format!(
+                    "https://{}/api/v4/projects/{}/repository/tree?path={}&ref={}&per_page=100",
+                    host, project, path_enc, self.branch
+                )
+            }
+        }
+    }
+
+    pub fn raw_file_url_for_path(&self, file_path: &str) -> String {
+        match &self.platform {
+            Platform::GitHub => format!(
+                "https://raw.githubusercontent.com/{}/{}/{}/{}",
+                self.owner, self.repo, self.branch, file_path
+            ),
+            Platform::Gitea(host) => format!(
+                "https://{}/{}/{}/raw/branch/{}/{}",
+                host, self.owner, self.repo, self.branch, file_path
+            ),
+            Platform::GitLab(host) => format!(
+                "https://{}/{}/{}/-/raw/{}/{}",
+                host, self.owner, self.repo, self.branch, file_path
+            ),
         }
     }
 }
@@ -255,15 +426,32 @@ pub enum GitHubError {
 pub struct GitHubClient {
     client: reqwest::Client,
     token: Option<String>,
+    platform: Platform,
 }
 
 impl GitHubClient {
     pub fn new(token: Option<String>) -> Result<Self> {
+        Self::new_for_platform(token, Platform::GitHub)
+    }
+
+    pub fn new_for_platform(token: Option<String>, platform: Platform) -> Result<Self> {
         let client = reqwest::Client::builder()
-            .user_agent("ghgrab/1.3.2")
+            .user_agent("ghgrab/2.0.0")
             .build()
             .context("Failed to create HTTP client")?;
-        Ok(GitHubClient { client, token })
+        Ok(GitHubClient {
+            client,
+            token,
+            platform,
+        })
+    }
+
+    pub fn new_for_url(token: Option<String>, gh_url: &GitHubUrl) -> Result<Self> {
+        Self::new_for_platform(token, gh_url.platform.clone())
+    }
+
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
     }
 
     async fn request(
@@ -275,7 +463,7 @@ impl GitHubClient {
         let mut builder = self.client.request(method, url);
 
         if let Some(token) = &self.token {
-            builder = builder.header("Authorization", format!("token {}", token));
+            builder = builder.header("Authorization", self.platform.auth_value(token));
         }
 
         if let Some(body) = body {
@@ -320,45 +508,271 @@ impl GitHubClient {
     }
 
     pub async fn fetch_contents(&self, url: &str) -> Result<Vec<RepoItem>> {
-        let response = self.request(reqwest::Method::GET, url, None).await?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!("GitHub API error: {}", response.status()));
+        if self.platform.is_gitlab() {
+            return self.fetch_contents_gitlab(url).await;
         }
-
+        let response = self.request(reqwest::Method::GET, url, None).await?;
         let items: Vec<RepoItem> = response
             .json()
             .await
-            .context("Failed to parse GitHub API response")?;
-
+            .context("Failed to parse API response")?;
         Ok(items)
+    }
+
+    async fn fetch_contents_gitlab(&self, url: &str) -> Result<Vec<RepoItem>> {
+        #[derive(serde::Deserialize)]
+        struct GitLabItem {
+            name: String,
+            #[serde(rename = "type")]
+            item_type: String,
+            path: String,
+        }
+
+        let response = self.request(reqwest::Method::GET, url, None).await?;
+        let gitlab_items: Vec<GitLabItem> = response
+            .json()
+            .await
+            .context("Failed to parse GitLab API response")?;
+
+        let parsed = Url::parse(url).context("Invalid GitLab API URL")?;
+        let host = parsed.host_str().unwrap_or("gitlab.com").to_string();
+
+        let query: std::collections::HashMap<String, String> = parsed
+            .query_pairs()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let branch = query
+            .get("ref")
+            .cloned()
+            .unwrap_or_else(|| "main".to_string());
+
+        let project_id = parsed
+            .path()
+            .split("/projects/")
+            .nth(1)
+            .and_then(|s| s.split('/').next())
+            .map(|s| urlencoding::decode(s).unwrap_or_default().to_string())
+            .unwrap_or_default();
+
+        Ok(gitlab_items
+            .into_iter()
+            .map(|item| {
+                let item_type = if item.item_type == "blob" {
+                    "file".to_string()
+                } else {
+                    "dir".to_string()
+                };
+
+                let project_encoded = urlencoding::encode(&project_id).to_string();
+
+                let download_url = if item_type == "file" {
+                    Some(format!(
+                        "https://{}/api/v4/projects/{}/repository/files/{}/raw?ref={}",
+                        host,
+                        project_encoded,
+                        urlencoding::encode(&item.path),
+                        branch
+                    ))
+                } else {
+                    None
+                };
+
+                let api_url = format!(
+                    "https://{}/api/v4/projects/{}/repository/tree?path={}&ref={}&per_page=100",
+                    host,
+                    project_encoded,
+                    urlencoding::encode(&item.path),
+                    branch
+                );
+
+                RepoItem {
+                    name: item.name,
+                    item_type,
+                    path: item.path,
+                    download_url,
+                    url: api_url,
+                    size: None,
+                    selected: false,
+                    lfs_oid: None,
+                    lfs_size: None,
+                    lfs_download_url: None,
+                }
+            })
+            .collect())
     }
 
     pub async fn fetch_recursive_tree(
         &self,
-        owner: &str,
-        repo: &str,
-        branch: &str,
+        gh_url: &GitHubUrl,
     ) -> std::result::Result<GitTreeResponse, GitHubError> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/git/trees/{}?recursive=1",
-            owner, repo, branch
-        );
-        let response = self.request(reqwest::Method::GET, &url, None).await?;
+        match &gh_url.platform {
+            Platform::GitHub => {
+                let url = format!(
+                    "https://api.github.com/repos/{}/{}/git/trees/{}?recursive=1",
+                    gh_url.owner, gh_url.repo, gh_url.branch
+                );
+                let response = self.request(reqwest::Method::GET, &url, None).await?;
+                let tree: GitTreeResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+                Ok(tree)
+            }
+            Platform::Gitea(host) => {
+                let direct_url = format!(
+                    "https://{}/api/v1/repos/{}/{}/git/trees/{}?recursive=1",
+                    host, gh_url.owner, gh_url.repo, gh_url.branch
+                );
+                if let Ok(resp) = self.request(reqwest::Method::GET, &direct_url, None).await {
+                    if let Ok(tree) = resp.json::<GitTreeResponse>().await {
+                        return Ok(tree);
+                    }
+                }
 
-        let tree: GitTreeResponse = response
-            .json()
-            .await
-            .map_err(|e| GitHubError::ApiError(e.to_string()))?;
-        Ok(tree)
+                let branch_url = format!(
+                    "https://{}/api/v1/repos/{}/{}/branches/{}",
+                    host, gh_url.owner, gh_url.repo, gh_url.branch
+                );
+                let branch_resp = self
+                    .request(reqwest::Method::GET, &branch_url, None)
+                    .await?;
+
+                #[derive(serde::Deserialize)]
+                struct GiteaBranch {
+                    commit: GiteaCommit,
+                }
+                #[derive(serde::Deserialize)]
+                struct GiteaCommit {
+                    id: String,
+                }
+
+                let branch_info: GiteaBranch = branch_resp
+                    .json()
+                    .await
+                    .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+
+                let tree_url = format!(
+                    "https://{}/api/v1/repos/{}/{}/git/trees/{}?recursive=1",
+                    host, gh_url.owner, gh_url.repo, branch_info.commit.id
+                );
+                let tree_resp = self.request(reqwest::Method::GET, &tree_url, None).await?;
+                let tree: GitTreeResponse = tree_resp
+                    .json()
+                    .await
+                    .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+                Ok(tree)
+            }
+            Platform::GitLab(host) => {
+                #[derive(serde::Deserialize)]
+                struct GitLabItem {
+                    id: String,
+                    #[allow(dead_code)]
+                    name: String,
+                    #[serde(rename = "type")]
+                    item_type: String,
+                    path: String,
+                    mode: String,
+                }
+
+                let project_str = format!("{}/{}", gh_url.owner, gh_url.repo);
+                let project = urlencoding::encode(&project_str).to_string();
+
+                let make_url = |page: u32| {
+                    format!(
+                        "https://{}/api/v4/projects/{}/repository/tree?ref={}&recursive=true&per_page=100&page={}",
+                        host, project, gh_url.branch, page
+                    )
+                };
+
+                let first_resp = self
+                    .request(reqwest::Method::GET, &make_url(1), None)
+                    .await?;
+
+                let total_pages: u32 = first_resp
+                    .headers()
+                    .get("x-total-pages")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+
+                let first_items: Vec<GitLabItem> = first_resp
+                    .json()
+                    .await
+                    .map_err(|e| GitHubError::ApiError(e.to_string()))?;
+
+                let mut all_entries: Vec<GitTreeEntry> = first_items
+                    .into_iter()
+                    .map(|item| GitTreeEntry {
+                        path: item.path,
+                        mode: item.mode,
+                        entry_type: item.item_type,
+                        size: None,
+                        sha: item.id,
+                        url: String::new(),
+                    })
+                    .collect();
+
+                if total_pages > 1 {
+                    let futures: Vec<_> = (2..=total_pages)
+                        .map(|page| {
+                            let url = make_url(page);
+                            async move {
+                                self.request(reqwest::Method::GET, &url, None)
+                                    .await?
+                                    .json::<Vec<GitLabItem>>()
+                                    .await
+                                    .map_err(|e| GitHubError::ApiError(e.to_string()))
+                            }
+                        })
+                        .collect();
+
+                    let pages = futures::future::join_all(futures).await;
+                    for page_result in pages {
+                        for item in page_result? {
+                            all_entries.push(GitTreeEntry {
+                                path: item.path,
+                                mode: item.mode,
+                                entry_type: item.item_type,
+                                size: None,
+                                sha: item.id,
+                                url: String::new(),
+                            });
+                        }
+                    }
+                }
+
+                Ok(GitTreeResponse {
+                    tree: all_entries,
+                    truncated: false,
+                })
+            }
+        }
     }
 
     pub async fn fetch_default_branch(
         &self,
-        owner: &str,
-        repo: &str,
+        gh_url: &GitHubUrl,
     ) -> std::result::Result<String, GitHubError> {
-        let url = format!("https://api.github.com/repos/{}/{}", owner, repo);
+        let url = match &gh_url.platform {
+            Platform::GitHub => {
+                format!(
+                    "https://api.github.com/repos/{}/{}",
+                    gh_url.owner, gh_url.repo
+                )
+            }
+            Platform::Gitea(host) => {
+                format!(
+                    "https://{}/api/v1/repos/{}/{}",
+                    host, gh_url.owner, gh_url.repo
+                )
+            }
+            Platform::GitLab(host) => {
+                let project_str = format!("{}/{}", gh_url.owner, gh_url.repo);
+                let project = urlencoding::encode(&project_str).to_string();
+                format!("https://{}/api/v4/projects/{}", host, project)
+            }
+        };
+
         let response = self.request(reqwest::Method::GET, &url, None).await?;
 
         #[derive(serde::Deserialize)]
@@ -404,10 +818,8 @@ impl GitHubClient {
         Ok(releases)
     }
 
-    // Fetch raw content
     pub async fn fetch_raw_content(&self, url: &str) -> Result<String> {
         let response = self.request(reqwest::Method::GET, url, None).await?;
-
         let content = response.text().await.context("Failed to read content")?;
         Ok(content)
     }
@@ -425,10 +837,9 @@ impl GitHubClient {
         let mut builder = self.client.request(reqwest::Method::GET, url);
 
         if let Some(token) = &self.token {
-            builder = builder.header("Authorization", format!("token {}", token));
+            builder = builder.header("Authorization", self.platform.auth_value(token));
         }
 
-        // Add Range header for partial download
         builder = builder.header("Range", format!("bytes=0-{}", max_bytes));
 
         let response = builder
@@ -439,14 +850,13 @@ impl GitHubClient {
         if !response.status().is_success()
             && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
         {
-            return Err(anyhow!("GitHub API error: {}", response.status()));
+            return Err(anyhow!("API error: {}", response.status()));
         }
 
         let content = response.text().await.context("Failed to read content")?;
         Ok(content)
     }
 
-    // Call LFS batch API
     pub async fn get_lfs_download_url(
         &self,
         owner: &str,
@@ -462,12 +872,7 @@ impl GitHubClient {
         let request_body = serde_json::json!({
             "operation": "download",
             "transfers": ["basic"],
-            "objects": [
-                {
-                    "oid": oid,
-                    "size": size
-                }
-            ]
+            "objects": [{"oid": oid, "size": size}]
         });
 
         let response = self
@@ -489,6 +894,7 @@ impl GitHubClient {
             .ok_or_else(|| anyhow!("No download URL in LFS response"))
     }
 
+    /// Resolve GitHub LFS pointers in a list of items. No-op for non-GitHub platforms.
     pub async fn resolve_lfs_files(
         &self,
         items: &mut [RepoItem],
@@ -496,6 +902,9 @@ impl GitHubClient {
         repo: &str,
         branch: &str,
     ) {
+        if !self.platform.is_github() {
+            return;
+        }
         for item in items.iter_mut() {
             if item.is_file() {
                 if let Some(size) = item.size {
@@ -547,6 +956,7 @@ mod tests {
         assert_eq!(parsed.repo, "rust");
         assert_eq!(parsed.branch, "master");
         assert_eq!(parsed.path, "src/tools");
+        assert_eq!(parsed.platform, Platform::GitHub);
     }
 
     #[test]
@@ -590,9 +1000,72 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_invalid_non_github_url() {
+    fn test_ambiguous_ref_candidates_for_github_branch_with_slash() {
+        let parsed =
+            GitHubUrl::parse("https://github.com/org/project/tree/feature/foo/src/core").unwrap();
+
+        let candidates = parsed.ambiguous_ref_candidates();
+
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates[0].branch, "feature/foo");
+        assert_eq!(candidates[0].path, "src/core");
+        assert_eq!(candidates[1].branch, "feature/foo/src");
+        assert_eq!(candidates[1].path, "core");
+        assert_eq!(candidates[2].branch, "feature/foo/src/core");
+        assert_eq!(candidates[2].path, "");
+    }
+
+    #[test]
+    fn test_ambiguous_ref_candidates_for_branch_only_url() {
+        let parsed = GitHubUrl::parse("https://github.com/org/project/tree/feature/foo").unwrap();
+
+        let candidates = parsed.ambiguous_ref_candidates();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].branch, "feature/foo");
+        assert_eq!(candidates[0].path, "");
+    }
+
+    #[test]
+    fn test_parse_gitlab_root_url() {
         let url = "https://gitlab.com/user/repo";
-        assert!(GitHubUrl::parse(url).is_err());
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.owner, "user");
+        assert_eq!(parsed.repo, "repo");
+        assert_eq!(parsed.branch, "main");
+        assert_eq!(parsed.path, "");
+        assert_eq!(parsed.platform, Platform::GitLab("gitlab.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_gitlab_tree_url() {
+        let url = "https://gitlab.com/user/repo/-/tree/develop/src/core";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.owner, "user");
+        assert_eq!(parsed.repo, "repo");
+        assert_eq!(parsed.branch, "develop");
+        assert_eq!(parsed.path, "src/core");
+        assert_eq!(parsed.platform, Platform::GitLab("gitlab.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_codeberg_root_url() {
+        let url = "https://codeberg.org/user/repo";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.owner, "user");
+        assert_eq!(parsed.repo, "repo");
+        assert_eq!(parsed.platform, Platform::Gitea("codeberg.org".to_string()));
+    }
+
+    #[test]
+    fn test_parse_codeberg_src_url() {
+        let url = "https://codeberg.org/user/repo/src/branch/main/docs/guide";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.owner, "user");
+        assert_eq!(parsed.repo, "repo");
+        assert_eq!(parsed.branch, "main");
+        assert_eq!(parsed.path, "docs/guide");
+        assert_eq!(parsed.platform, Platform::Gitea("codeberg.org".to_string()));
     }
 
     #[test]
@@ -615,6 +1088,7 @@ mod tests {
             repo: "repo".into(),
             branch: "main".into(),
             path: "src/lib.rs".into(),
+            platform: Platform::GitHub,
         };
         assert_eq!(
             gh.api_url(),
@@ -629,10 +1103,85 @@ mod tests {
             repo: "repo".into(),
             branch: "main".into(),
             path: String::new(),
+            platform: Platform::GitHub,
         };
         assert_eq!(
             gh.api_url(),
             "https://api.github.com/repos/owner/repo/contents?ref=main"
+        );
+    }
+
+    #[test]
+    fn test_gitea_api_url() {
+        let gh = GitHubUrl {
+            owner: "user".into(),
+            repo: "repo".into(),
+            branch: "main".into(),
+            path: "src".into(),
+            platform: Platform::Gitea("codeberg.org".to_string()),
+        };
+        assert_eq!(
+            gh.api_url(),
+            "https://codeberg.org/api/v1/repos/user/repo/contents/src?ref=main"
+        );
+    }
+
+    #[test]
+    fn test_gitlab_api_url() {
+        let gh = GitHubUrl {
+            owner: "user".into(),
+            repo: "repo".into(),
+            branch: "main".into(),
+            path: "src".into(),
+            platform: Platform::GitLab("gitlab.com".to_string()),
+        };
+        let url = gh.api_url();
+        assert!(url.contains("/api/v4/projects/user%2Frepo/repository/tree"));
+        assert!(url.contains("ref=main"));
+    }
+
+    #[test]
+    fn test_raw_file_url_github() {
+        let gh = GitHubUrl {
+            owner: "owner".into(),
+            repo: "repo".into(),
+            branch: "main".into(),
+            path: String::new(),
+            platform: Platform::GitHub,
+        };
+        assert_eq!(
+            gh.raw_file_url_for_path("src/lib.rs"),
+            "https://raw.githubusercontent.com/owner/repo/main/src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn test_raw_file_url_gitea() {
+        let gh = GitHubUrl {
+            owner: "user".into(),
+            repo: "repo".into(),
+            branch: "main".into(),
+            path: String::new(),
+            platform: Platform::Gitea("codeberg.org".to_string()),
+        };
+        assert_eq!(
+            gh.raw_file_url_for_path("src/lib.rs"),
+            "https://codeberg.org/user/repo/raw/branch/main/src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn test_raw_file_url_gitlab() {
+        let gh = GitHubUrl {
+            owner: "user".into(),
+            repo: "repo".into(),
+            branch: "main".into(),
+            path: String::new(),
+            platform: Platform::GitLab("gitlab.com".to_string()),
+        };
+        assert_eq!(
+            gh.raw_file_url_for_path("src/lib.rs"),
+            "https://gitlab.com/user/repo/-/raw/main/src/lib.rs"
         );
     }
 

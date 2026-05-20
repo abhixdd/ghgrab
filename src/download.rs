@@ -9,7 +9,12 @@ pub struct Downloader {
 }
 
 impl Downloader {
-    pub fn new(base_path: PathBuf, token: Option<String>) -> Result<Self> {
+    pub fn new(base_path: PathBuf, client: GitHubClient) -> Result<Self> {
+        fs::create_dir_all(&base_path)?;
+        Ok(Downloader { client, base_path })
+    }
+
+    pub fn new_github(base_path: PathBuf, token: Option<String>) -> Result<Self> {
         fs::create_dir_all(&base_path)?;
         Ok(Downloader {
             client: GitHubClient::new(token)?,

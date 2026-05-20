@@ -81,7 +81,7 @@ impl<T> AgentEnvelope<T> {
 
 pub async fn fetch_tree(url: &str, token: Option<String>) -> Result<AgentTreeResponse> {
     let gh_url = GitHubUrl::parse(url)?;
-    let client = GitHubClient::new(token.clone())?;
+    let client = GitHubClient::new_for_url(token.clone(), &gh_url)?;
     let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
     Ok(AgentTreeResponse {
@@ -112,7 +112,7 @@ pub async fn download_paths(
     no_folder: bool,
 ) -> Result<AgentDownloadResponse> {
     let gh_url = GitHubUrl::parse(url)?;
-    let client = GitHubClient::new(token.clone())?;
+    let client = GitHubClient::new_for_url(token.clone(), &gh_url)?;
     let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
     let items_to_download = if truncated {
@@ -129,7 +129,8 @@ pub async fn download_paths(
         base_dir.join(&repo_name)
     };
 
-    let downloader = Downloader::new(download_dir.clone(), token)?;
+    let download_client = GitHubClient::new_for_url(token, &gh_url)?;
+    let downloader = Downloader::new(download_dir.clone(), download_client)?;
     let errors = downloader
         .download_items(&items_to_download, "", |_| {})
         .await?;
@@ -192,13 +193,13 @@ pub fn classify_error(error: &anyhow::Error) -> &'static str {
             GitHubError::InvalidToken => "invalid_token",
             GitHubError::RateLimitReached(_) => "rate_limit",
             GitHubError::NotFound(_) => "not_found",
-            GitHubError::ApiError(_) => "github_api_error",
+            GitHubError::ApiError(_) => "api_error",
             GitHubError::Other(_) => "internal_error",
         };
     }
 
     let message = error.to_string().to_lowercase();
-    if message.contains("invalid url") || message.contains("not a github url") {
+    if message.contains("invalid url") || message.contains("url must contain") {
         "invalid_url"
     } else if message.contains("cannot be combined") {
         "invalid_arguments"
@@ -215,22 +216,31 @@ async fn load_tree(
     client: &GitHubClient,
     mut gh_url: GitHubUrl,
 ) -> Result<(GitHubUrl, Vec<RepoItem>, bool)> {
-    let mut tree_result = client
-        .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
-        .await;
+    let mut tree_result = client.fetch_recursive_tree(&gh_url).await;
+
+    if let Err(GitHubError::NotFound(_)) = &tree_result {
+        for candidate in gh_url.ambiguous_ref_candidates() {
+            match client.fetch_recursive_tree(&candidate).await {
+                Ok(tree) => {
+                    gh_url = candidate;
+                    tree_result = Ok(tree);
+                    break;
+                }
+                Err(GitHubError::NotFound(_)) => {}
+                Err(other) => {
+                    tree_result = Err(other);
+                    break;
+                }
+            }
+        }
+    }
 
     if let Err(GitHubError::NotFound(_)) = &tree_result {
         if gh_url.branch == "main" {
-            // Try to detect the actual default branch from the API
-            if let Ok(default_branch) = client
-                .fetch_default_branch(&gh_url.owner, &gh_url.repo)
-                .await
-            {
+            if let Ok(default_branch) = client.fetch_default_branch(&gh_url).await {
                 if default_branch != "main" {
                     gh_url.branch = default_branch;
-                    tree_result = client
-                        .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
-                        .await;
+                    tree_result = client.fetch_recursive_tree(&gh_url).await;
                 }
             }
         }
@@ -238,8 +248,7 @@ async fn load_tree(
 
     match tree_result {
         Ok(tree_response) => {
-            let mut items =
-                map_tree_to_items(tree_response, &gh_url.owner, &gh_url.repo, &gh_url.branch);
+            let mut items = map_tree_to_items(tree_response, &gh_url);
             client
                 .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
                 .await;
@@ -270,7 +279,7 @@ async fn fetch_path_items_recursive(
     gh_url: &GitHubUrl,
     path: &str,
 ) -> Result<Vec<RepoItem>> {
-    let request_url = contents_api_url(&gh_url.owner, &gh_url.repo, &gh_url.branch, path);
+    let request_url = gh_url.contents_api_url_for_path(path);
     let mut items = client.fetch_contents(&request_url).await?;
     client
         .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
@@ -291,16 +300,6 @@ async fn fetch_path_items_recursive(
     }
 
     Ok(results)
-}
-
-fn contents_api_url(owner: &str, repo: &str, branch: &str, path: &str) -> String {
-    let base = format!("https://api.github.com/repos/{}/{}/contents", owner, repo);
-    let normalized = normalize_requested_path(path);
-    if normalized.is_empty() {
-        format!("{}?ref={}", base, branch)
-    } else {
-        format!("{}/{}?ref={}", base, normalized, branch)
-    }
 }
 
 fn resolve_base_dir(output_path: Option<String>, cwd: bool) -> Result<PathBuf> {
@@ -389,12 +388,7 @@ fn normalize_requested_path(path: &str) -> String {
     path.replace('\\', "/").trim_matches('/').to_string()
 }
 
-fn map_tree_to_items(
-    tree: crate::github::GitTreeResponse,
-    owner: &str,
-    repo: &str,
-    branch: &str,
-) -> Vec<RepoItem> {
+fn map_tree_to_items(tree: crate::github::GitTreeResponse, gh_url: &GitHubUrl) -> Vec<RepoItem> {
     tree.tree
         .into_iter()
         .map(|entry| {
@@ -404,17 +398,14 @@ fn map_tree_to_items(
                 .next_back()
                 .unwrap_or(&entry.path)
                 .to_string();
-            let item_type = if entry.entry_type == "tree" {
+            let item_type = if entry.entry_type == "tree" || entry.entry_type == "dir" {
                 "dir".to_string()
             } else {
                 "file".to_string()
             };
 
             let download_url = if item_type == "file" {
-                Some(format!(
-                    "https://raw.githubusercontent.com/{}/{}/{}/{}",
-                    owner, repo, branch, entry.path
-                ))
+                Some(gh_url.raw_file_url_for_path(&entry.path))
             } else {
                 None
             };
@@ -422,10 +413,7 @@ fn map_tree_to_items(
             RepoItem {
                 name,
                 item_type,
-                url: format!(
-                    "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
-                    owner, repo, &entry.path, branch
-                ),
+                url: gh_url.contents_api_url_for_path(&entry.path),
                 path: entry.path,
                 download_url,
                 size: entry.size,
@@ -504,22 +492,6 @@ mod tests {
     #[test]
     fn normalizes_windows_style_paths() {
         assert_eq!(normalize_requested_path("\\src\\main.rs\\"), "src/main.rs");
-    }
-
-    #[test]
-    fn builds_contents_api_url_for_root() {
-        assert_eq!(
-            contents_api_url("o", "r", "main", ""),
-            "https://api.github.com/repos/o/r/contents?ref=main"
-        );
-    }
-
-    #[test]
-    fn builds_contents_api_url_for_nested_path() {
-        assert_eq!(
-            contents_api_url("o", "r", "main", "\\src\\tools\\"),
-            "https://api.github.com/repos/o/r/contents/src/tools?ref=main"
-        );
     }
 
     #[test]

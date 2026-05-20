@@ -133,7 +133,7 @@ pub fn parse_repo_reference(value: &str) -> Result<ParsedRepo> {
     if value.starts_with("https://") || value.starts_with("http://") {
         let url = Url::parse(value).context("Invalid repository URL")?;
         if url.host_str() != Some("github.com") {
-            bail!("Repository URL must point to github.com");
+            bail!("The `release` command only supports GitHub (github.com). Use a URL like https://github.com/owner/repo or the short form owner/repo");
         }
 
         let parts: Vec<_> = url
@@ -155,7 +155,7 @@ pub fn parse_repo_reference(value: &str) -> Result<ParsedRepo> {
     let owner = parts.next().unwrap_or_default().trim();
     let repo = parts.next().unwrap_or_default().trim();
     if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
-        bail!("Repository must be in the form owner/repo or a GitHub URL");
+        bail!("Repository must be in the form owner/repo or a github.com URL (the release command is GitHub-only)");
     }
 
     Ok(ParsedRepo {

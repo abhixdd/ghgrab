@@ -84,7 +84,7 @@ pub fn render(
     f.render_widget(header, header_area[1]);
 
     let desc_text = Line::from(Span::styled(
-        "Download any file or folder from GitHub. No full clones. Just what you need.",
+        "Download any file or folder from GitHub, GitLab, Codeberg and more. No full clones.",
         Style::default()
             .fg(FG_COLOR())
             .add_modifier(Modifier::ITALIC),
@@ -148,7 +148,7 @@ pub fn render(
             Block::default()
                 .borders(Borders::ALL)
                 .title(Span::styled(
-                    " Enter GitHub URL or Search ",
+                    " Enter URL or Search ",
                     Style::default()
                         .fg(ACCENT_COLOR())
                         .add_modifier(Modifier::BOLD),
@@ -182,21 +182,21 @@ pub fn render(
         Line::from(vec![
             Span::styled("  1. ", Style::default().fg(BORDER_COLOR())),
             Span::styled(
-                "https://github.com/abhixdd/ghgrab",
+                "https://github.com/rust-lang/rust/tree/master/src/tools",
                 Style::default().fg(ACCENT_COLOR()),
             ),
         ]),
         Line::from(vec![
             Span::styled("  2. ", Style::default().fg(BORDER_COLOR())),
             Span::styled(
-                "https://github.com/rust-lang/rust/tree/master/src/tools",
+                "https://codeberg.org/user/repo/src/branch/main/folder",
                 Style::default().fg(ACCENT_COLOR()),
             ),
         ]),
         Line::from(vec![
             Span::styled("  3. ", Style::default().fg(BORDER_COLOR())),
             Span::styled(
-                "https://github.com/user/repo/tree/main/specific-folder",
+                "https://gitlab.com/user/repo/-/tree/main/folder",
                 Style::default().fg(ACCENT_COLOR()),
             ),
         ]),
@@ -209,7 +209,7 @@ pub fn render(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "Works with any public or private GitHub repository",
+                "Works with GitHub, GitLab, Codeberg, Gitea, Forgejo and self-hosted instances",
                 Style::default()
                     .fg(FG_COLOR())
                     .add_modifier(Modifier::ITALIC),

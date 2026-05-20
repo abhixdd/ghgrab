@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ghgrab"
-version = "1.3.2"
+version = "2.0.0"
 description = "Download specific files and folders from GitHub repositories without cloning"
 authors = [{name = "abhixdd"}]
 license = {text = "MIT"}

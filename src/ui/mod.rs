@@ -1077,9 +1077,23 @@ async fn handle_input(
     Ok(false)
 }
 
-async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url: GitHubUrl) {
+async fn load_repo(state: Arc<Mutex<AppState>>, _client: GitHubClient, mut gh_url: GitHubUrl) {
     let state_c = state.clone();
-    let mut current_client = client;
+
+    let token = {
+        let s = state_c.lock().await;
+        s.github_token.clone()
+    };
+
+    let mut current_client = match GitHubClient::new_for_url(token, &gh_url) {
+        Ok(c) => c,
+        Err(e) => {
+            let mut s = state_c.lock().await;
+            s.mode = AppMode::Input;
+            s.show_toast(format!("Failed to create client: {}", e), ToastType::Error);
+            return;
+        }
+    };
 
     {
         let mut s = state_c.lock().await;
@@ -1087,9 +1101,7 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
         s.mode = AppMode::Searching;
     }
 
-    let mut tree_result = current_client
-        .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
-        .await;
+    let mut tree_result = current_client.fetch_recursive_tree(&gh_url).await;
 
     if let Err(GitHubError::InvalidToken) = &tree_result {
         {
@@ -1099,34 +1111,43 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
                 ToastType::Warning,
             );
         }
-        if let Ok(no_auth_client) = GitHubClient::new(None) {
+        if let Ok(no_auth_client) = GitHubClient::new_for_platform(None, gh_url.platform.clone()) {
             current_client = no_auth_client;
-            tree_result = current_client
-                .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
-                .await;
+            tree_result = current_client.fetch_recursive_tree(&gh_url).await;
+        }
+    }
+
+    if let Err(GitHubError::NotFound(_)) = &tree_result {
+        for candidate in gh_url.ambiguous_ref_candidates() {
+            match current_client.fetch_recursive_tree(&candidate).await {
+                Ok(tree) => {
+                    gh_url = candidate;
+                    tree_result = Ok(tree);
+                    break;
+                }
+                Err(GitHubError::NotFound(_)) => {}
+                Err(other) => {
+                    tree_result = Err(other);
+                    break;
+                }
+            }
         }
     }
 
     if let Err(GitHubError::NotFound(_)) = &tree_result {
         if gh_url.branch == "main" {
-            // Try to detect the actual default branch from the API
             {
                 let mut s = state_c.lock().await;
                 s.status_message = "Detecting default branch...".to_string();
             }
-            if let Ok(default_branch) = current_client
-                .fetch_default_branch(&gh_url.owner, &gh_url.repo)
-                .await
-            {
+            if let Ok(default_branch) = current_client.fetch_default_branch(&gh_url).await {
                 if default_branch != "main" {
                     gh_url.branch = default_branch;
                     {
                         let mut s = state_c.lock().await;
                         s.status_message = format!("Trying {} branch...", gh_url.branch);
                     }
-                    tree_result = current_client
-                        .fetch_recursive_tree(&gh_url.owner, &gh_url.repo, &gh_url.branch)
-                        .await;
+                    tree_result = current_client.fetch_recursive_tree(&gh_url).await;
                 }
             }
         }
@@ -1135,8 +1156,7 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
     match tree_result {
         Ok(tree_response) => {
             let is_truncated = tree_response.truncated;
-            let items =
-                map_tree_to_items(tree_response, &gh_url.owner, &gh_url.repo, &gh_url.branch);
+            let items = map_tree_to_items(tree_response, &gh_url);
             let folder_sizes = calculate_folder_sizes(&items);
 
             let mut s = state_c.lock().await;
@@ -1178,8 +1198,7 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
             s.status_message = String::new();
             if is_truncated {
                 s.show_toast(
-                    "Warning: Tree was truncated by GitHub API. Some files may be missing."
-                        .to_string(),
+                    "Large repo: tree truncated by API. Browsing folder-by-folder.".to_string(),
                     ToastType::Warning,
                 );
             } else {
@@ -1187,8 +1206,6 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
             }
         }
         Err(tree_err) => {
-            // Check if the error is a non-recoverable error that should be shown
-            // directly, rather than falling back to folder-by-folder navigation
             let should_fallback =
                 matches!(&tree_err, GitHubError::ApiError(_) | GitHubError::Other(_));
 
@@ -1213,7 +1230,7 @@ async fn load_repo(state: Arc<Mutex<AppState>>, client: GitHubClient, mut gh_url
             {
                 let mut s = state_c.lock().await;
                 s.status_message =
-                    "Tree too large, falling back to folder-by-folder...".to_string();
+                    "Repo too large for full tree, switching to folder-by-folder...".to_string();
                 s.full_tree = None;
             }
 
@@ -1317,7 +1334,15 @@ async fn perform_download(state: Arc<Mutex<AppState>>) -> Result<()> {
         download_dir.join(repo_name)
     };
 
-    let downloader = Downloader::new(download_dir.clone(), token)?;
+    let platform = {
+        let s = state.lock().await;
+        s.current_url
+            .as_ref()
+            .map(|u| u.platform.clone())
+            .unwrap_or(crate::github::Platform::GitHub)
+    };
+    let download_client = GitHubClient::new_for_platform(token, platform)?;
+    let downloader = Downloader::new(download_dir.clone(), download_client)?;
     let state_c = state.clone();
 
     let result = downloader
@@ -1376,12 +1401,7 @@ fn calculate_folder_sizes(items: &[RepoItem]) -> HashMap<String, u64> {
     sizes
 }
 
-fn map_tree_to_items(
-    tree: crate::github::GitTreeResponse,
-    owner: &str,
-    repo: &str,
-    branch: &str,
-) -> Vec<RepoItem> {
+fn map_tree_to_items(tree: crate::github::GitTreeResponse, gh_url: &GitHubUrl) -> Vec<RepoItem> {
     tree.tree
         .into_iter()
         .map(|entry| {
@@ -1391,17 +1411,14 @@ fn map_tree_to_items(
                 .next_back()
                 .unwrap_or(&entry.path)
                 .to_string();
-            let item_type = if entry.entry_type == "tree" {
+            let item_type = if entry.entry_type == "tree" || entry.entry_type == "dir" {
                 "dir".to_string()
             } else {
                 "file".to_string()
             };
 
             let download_url = if item_type == "file" {
-                Some(format!(
-                    "https://raw.githubusercontent.com/{}/{}/{}/{}",
-                    owner, repo, branch, entry.path
-                ))
+                Some(gh_url.raw_file_url_for_path(&entry.path))
             } else {
                 None
             };
@@ -1409,10 +1426,7 @@ fn map_tree_to_items(
             RepoItem {
                 name,
                 item_type,
-                url: format!(
-                    "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
-                    owner, repo, &entry.path, branch
-                ),
+                url: gh_url.contents_api_url_for_path(&entry.path),
                 path: entry.path,
                 download_url,
                 size: entry.size,
