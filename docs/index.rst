@@ -20,6 +20,7 @@ Repository browsing and path downloads support multiple forges. TUI repository s
    :caption: Usage
 
    commands
+   agent-integrations
    configuration
    theming
 

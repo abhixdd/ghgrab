@@ -84,6 +84,8 @@ The `agent` command is designed for non-interactive tooling. It prints a stable 
 - `data` on success
 - `error` on failure
 
+See [agent-integrations.md](agent-integrations.md) for production consumers (including [Willow 2.0](https://github.com/rudi193-cmd/willow-2.0) SAFE app install).
+
 ### Fetch a repository tree
 
 ```bash

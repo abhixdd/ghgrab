@@ -44,6 +44,26 @@ Use full semantic version tags for releases, for example `v2.0.1`.
 yay -S ghgrab-bin
 ```
 
+## Homebrew
+
+A formula ships in this repository for macOS and Linux (Intel and ARM64). It downloads prebuilt release binaries from GitHub.
+
+From a git checkout:
+
+```bash
+brew install --formula Formula/ghgrab.rb
+```
+
+To install a tagged release after cloning:
+
+```bash
+git clone https://github.com/abhixdd/ghgrab.git
+cd ghgrab
+brew install --formula Formula/ghgrab.rb
+```
+
+Submitting to [Homebrew/homebrew-core](https://github.com/Homebrew/homebrew-core) is tracked in [issue #52](https://github.com/abhixdd/ghgrab/issues/52).
+
 ## Verify the install
 
 After installation, confirm the binary is available:

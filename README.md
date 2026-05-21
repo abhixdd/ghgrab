@@ -69,6 +69,16 @@ nix run "github:abhixdd/ghgrab/<tag>"
 yay -S ghgrab-bin   
 ```
 
+### Homebrew
+
+A formula ships in `Formula/ghgrab.rb` (macOS and Linux, Intel and ARM64):
+
+```bash
+brew install --formula Formula/ghgrab.rb
+```
+
+See [docs/installation.md](docs/installation.md). Homebrew core submission: [#52](https://github.com/abhixdd/ghgrab/issues/52).
+
 ---
 
 ### Quick Start
