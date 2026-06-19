@@ -38,6 +38,7 @@ fn agent_download_conflicting_repo_flags_return_json_error() {
         "https://github.com/rust-lang/rust",
         "README.md",
         "--repo",
+        "--json",
     ]);
 
     assert_eq!(payload["api_version"], "1");
