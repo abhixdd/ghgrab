@@ -261,6 +261,57 @@ ghgrab agent download https://github.com/rust-lang/rust src/tools --cwd --no-fol
 
 You can pass `--token <TOKEN>` to `agent tree` and `agent download` when an external tool, CI job, or coding agent should authenticate without relying on saved local config.
 
+### MCP (Model Context Protocol) Server
+
+`ghgrab` can act as an MCP server, allowing AI coding assistants (like Cursor, Claude Desktop, VS Code, and Windsurf) to search GitHub repositories, list directories, download folders/files, read file contents, and download release assets directly.
+
+#### Auto-Installation
+
+You can automatically configure `ghgrab` as an MCP server in your favorite AI client by running:
+
+```bash
+ghgrab mcp --install
+```
+
+This interactive command will:
+1. Detect which supported clients are installed on your machine.
+2. Prompt you to select one.
+3. Automatically append the correct `ghgrab mcp` command block to that client's configuration file.
+4. Pass through your saved GitHub token (if set in `ghgrab config`) so the AI client doesn't hit anonymous API rate limits.
+
+#### Manual Configuration
+
+If you prefer to configure it manually, add the following to your client's MCP configuration file (e.g. `claude_desktop_config.json` or `mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "ghgrab": {
+      "command": "ghgrab",
+      "args": ["mcp"],
+      "env": {
+        "GITHUB_TOKEN": "your_github_token_here"
+      }
+    }
+  }
+}
+```
+
+*Note: The `env.GITHUB_TOKEN` block is optional but highly recommended to avoid GitHub API rate limiting.*
+
+#### Exposed Tools
+
+The `ghgrab` MCP server exposes 8 powerful tools to AI assistants:
+
+1. `repo_tree` - Lists all files and directories in a Git repository (supports GitHub, GitLab, Codeberg, Gitea, Forgejo).
+2. `download_files` - Downloads specific files or folders from a repository to the local filesystem.
+3. `download_release` - Downloads a GitHub release asset with OS/arch auto-detection (runs non-interactively).
+4. `search_repos` - Searches GitHub repositories by keyword.
+5. `read_file` - Reads the raw text content of a single file from a repository.
+6. `read_file_preview` - Reads a preview (first N bytes) of a file from a repository (useful for peeking at large files).
+7. `list_releases` - Lists all releases for a GitHub repository.
+8. `repo_info` - Gets repository metadata such as default branch, platform type, and parsed URL components.
+
 ### Configuration
 
 To manage your settings:

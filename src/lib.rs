@@ -3,5 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod download;
 pub mod github;
+pub mod mcp;
+pub mod mcp_install;
 pub mod release;
 pub mod ui;

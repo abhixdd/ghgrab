@@ -31,6 +31,7 @@ pub struct ReleaseRequest {
     pub cwd: bool,
     pub bin_path: Option<String>,
     pub token: Option<String>,
+    pub allow_prompt: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +75,7 @@ pub async fn download_release(request: ReleaseRequest) -> Result<ReleaseDownload
         request.os.as_deref(),
         request.arch.as_deref(),
         request.file_type,
+        request.allow_prompt,
     )?;
 
     let base_dir = resolve_base_dir(request.output_path.clone(), request.cwd)?;
@@ -173,7 +175,7 @@ pub fn select_asset_name_for_request(
     file_type: FileTypePreference,
 ) -> Result<String> {
     Ok(
-        select_asset(assets, repo, asset_regex, os, arch, file_type)?
+        select_asset(assets, repo, asset_regex, os, arch, file_type, true)?
             .name
             .clone(),
     )
@@ -208,6 +210,7 @@ fn select_asset<'a>(
     os: Option<&str>,
     arch: Option<&str>,
     file_type: FileTypePreference,
+    allow_prompt: bool,
 ) -> Result<&'a GitHubReleaseAsset> {
     if assets.is_empty() {
         bail!("The selected release has no downloadable assets");
@@ -245,6 +248,10 @@ fn select_asset<'a>(
 
     if asset_regex.is_some() || has_clear_best_match(&candidates) {
         return Ok(candidates[0].0);
+    }
+
+    if !allow_prompt {
+        bail!("Multiple release assets matched, and interactive selection is disabled. Please specify a more specific asset_regex.");
     }
 
     prompt_for_asset_selection(&candidates)

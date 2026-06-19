@@ -370,7 +370,7 @@ pub struct SearchResult {
     pub items: Vec<SearchItem>,
 }
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct SearchItem {
     pub full_name: String,
     pub description: Option<String>,
@@ -381,7 +381,7 @@ pub struct SearchItem {
     pub pushed_at: String,
 }
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct GitHubRelease {
     pub tag_name: String,
     pub draft: bool,
@@ -389,7 +389,7 @@ pub struct GitHubRelease {
     pub assets: Vec<GitHubReleaseAsset>,
 }
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct GitHubReleaseAsset {
     pub name: String,
     pub browser_download_url: String,
