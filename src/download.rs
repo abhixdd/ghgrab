@@ -1,24 +1,34 @@
 use crate::github::{GitHubClient, RepoItem};
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+pub const DEFAULT_JOBS: usize = 4;
 
 pub struct Downloader {
     client: GitHubClient,
     base_path: PathBuf,
+    jobs: usize,
 }
 
 impl Downloader {
-    pub fn new(base_path: PathBuf, client: GitHubClient) -> Result<Self> {
+    pub fn new(base_path: PathBuf, client: GitHubClient, jobs: usize) -> Result<Self> {
         fs::create_dir_all(&base_path)?;
-        Ok(Downloader { client, base_path })
+        Ok(Downloader {
+            client,
+            base_path,
+            jobs,
+        })
     }
 
-    pub fn new_github(base_path: PathBuf, token: Option<String>) -> Result<Self> {
+    pub fn new_github(base_path: PathBuf, token: Option<String>, jobs: usize) -> Result<Self> {
         fs::create_dir_all(&base_path)?;
         Ok(Downloader {
             client: GitHubClient::new(token)?,
             base_path,
+            jobs,
         })
     }
 
@@ -28,24 +38,26 @@ impl Downloader {
         _repo_path: &str,
         progress_callback: impl Fn(String) + Send + Sync + 'static,
     ) -> Result<Vec<String>> {
-        let mut errors = Vec::new();
+        let progress_callback = Arc::new(progress_callback);
 
-        for item in items {
-            let dest_path = self.base_path.join(&item.name);
+        let results: Vec<Result<(), String>> = futures::stream::iter(items.iter().cloned())
+            .map(|item| {
+                let dest_path = self.base_path.join(&item.name);
+                let cb = Arc::clone(&progress_callback);
+                async move {
+                    let result = if item.is_file() {
+                        self.download_file(&item, dest_path, cb.as_ref()).await
+                    } else {
+                        self.download_folder(&item, dest_path, cb.as_ref()).await
+                    };
+                    result.map_err(|e| format!("Failed to download {}: {}", item.name, e))
+                }
+            })
+            .buffer_unordered(self.jobs)
+            .collect()
+            .await;
 
-            let result = if item.is_file() {
-                self.download_file(item, dest_path, &progress_callback)
-                    .await
-            } else {
-                self.download_folder(item, dest_path, &progress_callback)
-                    .await
-            };
-
-            if let Err(e) = result {
-                errors.push(format!("Failed to download {}: {}", item.name, e));
-            }
-        }
-        Ok(errors)
+        Ok(results.into_iter().filter_map(|r| r.err()).collect())
     }
 
     async fn download_file(
@@ -88,17 +100,29 @@ impl Downloader {
             fs::create_dir_all(&dest_path)?;
             let contents = self.client.fetch_contents(&item.url).await?;
 
-            for sub_item in contents {
-                let sub_dest_path = dest_path.join(&sub_item.name);
+            let results: Vec<Result<(), String>> = futures::stream::iter(contents)
+                .map(|sub_item| {
+                    let sub_dest_path = dest_path.join(&sub_item.name);
+                    async move {
+                        let result = if sub_item.is_file() {
+                            self.download_file(&sub_item, sub_dest_path, progress_callback)
+                                .await
+                        } else {
+                            self.download_folder(&sub_item, sub_dest_path, progress_callback)
+                                .await
+                        };
+                        result.map_err(|e| format!("Failed to download {}: {}", sub_item.name, e))
+                    }
+                })
+                .buffer_unordered(self.jobs)
+                .collect()
+                .await;
 
-                if sub_item.is_file() {
-                    self.download_file(&sub_item, sub_dest_path, progress_callback)
-                        .await?;
-                } else {
-                    self.download_folder(&sub_item, sub_dest_path, progress_callback)
-                        .await?;
-                }
+            let errors: Vec<String> = results.into_iter().filter_map(|r| r.err()).collect();
+            if let Some(first_error) = errors.into_iter().next() {
+                return Err(anyhow::anyhow!(first_error));
             }
+
             Ok(())
         })
     }
