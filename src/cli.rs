@@ -31,7 +31,7 @@ pub struct Cli {
     )]
     token: Option<String>,
 
-    #[arg(long, short = 'j', default_value_t = DEFAULT_JOBS, help = "Number of parallel downloads")]
+    #[arg(long, short = 'j', default_value_t = DEFAULT_JOBS, value_parser = parse_jobs, help = "Number of parallel downloads (1–64)")]
     jobs: usize,
 }
 
@@ -130,7 +130,7 @@ enum AgentCommand {
             help = "One-time GitHub token for this run. Use `auto`/`gh` to read from GitHub CLI"
         )]
         token: Option<String>,
-        #[arg(long, short = 'j', default_value_t = DEFAULT_JOBS, help = "Number of parallel downloads")]
+        #[arg(long, short = 'j', default_value_t = DEFAULT_JOBS, value_parser = parse_jobs, help = "Number of parallel downloads (1–64)")]
         jobs: usize,
         #[arg(long, help = "Print output as JSON (for scripting)")]
         json: bool,
@@ -339,6 +339,17 @@ pub async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_jobs(s: &str) -> Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("'{}' is not a valid number", s))?;
+    if !(1..=64).contains(&n) {
+        Err(format!("--jobs must be between 1 and 64 (got {})", n))
+    } else {
+        Ok(n)
+    }
 }
 
 fn resolve_github_token(

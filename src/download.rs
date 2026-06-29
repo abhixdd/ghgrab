@@ -4,13 +4,14 @@ use futures::StreamExt;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 pub const DEFAULT_JOBS: usize = 4;
 
 pub struct Downloader {
     client: GitHubClient,
     base_path: PathBuf,
-    jobs: usize,
+    semaphore: Arc<Semaphore>,
 }
 
 impl Downloader {
@@ -19,7 +20,7 @@ impl Downloader {
         Ok(Downloader {
             client,
             base_path,
-            jobs,
+            semaphore: Arc::new(Semaphore::new(jobs)),
         })
     }
 
@@ -28,7 +29,7 @@ impl Downloader {
         Ok(Downloader {
             client: GitHubClient::new(token)?,
             base_path,
-            jobs,
+            semaphore: Arc::new(Semaphore::new(jobs)),
         })
     }
 
@@ -40,24 +41,31 @@ impl Downloader {
     ) -> Result<Vec<String>> {
         let progress_callback = Arc::new(progress_callback);
 
-        let results: Vec<Result<(), String>> = futures::stream::iter(items.iter().cloned())
+        let results: Vec<Result<()>> = futures::stream::iter(items.iter().cloned())
             .map(|item| {
                 let dest_path = self.base_path.join(&item.name);
                 let cb = Arc::clone(&progress_callback);
                 async move {
-                    let result = if item.is_file() {
-                        self.download_file(&item, dest_path, cb.as_ref()).await
+                    if item.is_file() {
+                        self.download_file(&item, dest_path, cb.as_ref())
+                            .await
+                            .with_context(|| format!("Failed to download {}", item.name))
                     } else {
-                        self.download_folder(&item, dest_path, cb.as_ref()).await
-                    };
-                    result.map_err(|e| format!("Failed to download {}: {}", item.name, e))
+                        self.download_folder(&item, dest_path, cb.as_ref())
+                            .await
+                            .with_context(|| format!("Failed to download {}", item.name))
+                    }
                 }
             })
-            .buffer_unordered(self.jobs)
+            .buffer_unordered(usize::MAX)
             .collect()
             .await;
 
-        Ok(results.into_iter().filter_map(|r| r.err()).collect())
+        Ok(results
+            .into_iter()
+            .filter_map(|r| r.err())
+            .map(|e| format!("{:#}", e))
+            .collect())
     }
 
     async fn download_file(
@@ -73,6 +81,11 @@ impl Downloader {
         let lfs_indicator = if item.is_lfs() { " [LFS]" } else { "" };
         progress_callback(format!("Downloading{}: {}", lfs_indicator, item.name));
 
+        let _permit = Arc::clone(&self.semaphore)
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
+
         let content = self
             .client
             .fetch_bytes(download_url)
@@ -83,7 +96,8 @@ impl Downloader {
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(&dest_path, content).context(format!("Failed to write file: {:?}", dest_path))?;
+        fs::write(&dest_path, content)
+            .with_context(|| format!("Failed to write file: {:?}", dest_path))?;
 
         Ok(())
     }
@@ -96,31 +110,44 @@ impl Downloader {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             progress_callback(format!("Scanning folder: {}", item.name));
-
             fs::create_dir_all(&dest_path)?;
-            let contents = self.client.fetch_contents(&item.url).await?;
 
-            let results: Vec<Result<(), String>> = futures::stream::iter(contents)
+            let contents = {
+                let _permit = Arc::clone(&self.semaphore)
+                    .acquire_owned()
+                    .await
+                    .expect("semaphore closed");
+                self.client.fetch_contents(&item.url).await?
+                // permit released here when _permit drops
+            };
+
+            let results: Vec<Result<()>> = futures::stream::iter(contents)
                 .map(|sub_item| {
                     let sub_dest_path = dest_path.join(&sub_item.name);
                     async move {
-                        let result = if sub_item.is_file() {
+                        if sub_item.is_file() {
                             self.download_file(&sub_item, sub_dest_path, progress_callback)
                                 .await
+                                .with_context(|| format!("Failed to download {}", sub_item.name))
                         } else {
                             self.download_folder(&sub_item, sub_dest_path, progress_callback)
                                 .await
-                        };
-                        result.map_err(|e| format!("Failed to download {}: {}", sub_item.name, e))
+                                .with_context(|| format!("Failed to download {}", sub_item.name))
+                        }
                     }
                 })
-                .buffer_unordered(self.jobs)
+                .buffer_unordered(usize::MAX)
                 .collect()
                 .await;
 
-            let errors: Vec<String> = results.into_iter().filter_map(|r| r.err()).collect();
-            if let Some(first_error) = errors.into_iter().next() {
-                return Err(anyhow::anyhow!(first_error));
+            let errors: Vec<String> = results
+                .into_iter()
+                .filter_map(|r| r.err())
+                .map(|e| format!("{:#}", e))
+                .collect();
+
+            if !errors.is_empty() {
+                return Err(anyhow::anyhow!("{}", errors.join("\n")));
             }
 
             Ok(())
