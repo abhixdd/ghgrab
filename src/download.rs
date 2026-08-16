@@ -11,6 +11,7 @@ pub const DEFAULT_JOBS: usize = 4;
 pub struct Downloader {
     client: GitHubClient,
     base_path: PathBuf,
+    jobs: usize,
     semaphore: Arc<Semaphore>,
 }
 
@@ -20,6 +21,7 @@ impl Downloader {
         Ok(Downloader {
             client,
             base_path,
+            jobs,
             semaphore: Arc::new(Semaphore::new(jobs)),
         })
     }
@@ -29,6 +31,7 @@ impl Downloader {
         Ok(Downloader {
             client: GitHubClient::new(token)?,
             base_path,
+            jobs,
             semaphore: Arc::new(Semaphore::new(jobs)),
         })
     }
@@ -41,29 +44,30 @@ impl Downloader {
     ) -> Result<Vec<String>> {
         let progress_callback = Arc::new(progress_callback);
 
-        let results: Vec<Result<()>> = futures::stream::iter(items.iter().cloned())
+        let nested: Vec<Vec<anyhow::Error>> = futures::stream::iter(items.iter().cloned())
             .map(|item| {
                 let dest_path = self.base_path.join(&item.name);
                 let cb = Arc::clone(&progress_callback);
                 async move {
                     if item.is_file() {
-                        self.download_file(&item, dest_path, cb.as_ref())
-                            .await
-                            .with_context(|| format!("Failed to download {}", item.name))
+                        match self.download_file(&item, dest_path, cb.as_ref()).await {
+                            Ok(()) => vec![],
+                            Err(e) => vec![e.context(format!("Failed to download {}", item.name))],
+                        }
                     } else {
-                        self.download_folder(&item, dest_path, cb.as_ref())
-                            .await
-                            .with_context(|| format!("Failed to download {}", item.name))
+                        self.download_folder(&item, dest_path, cb.as_ref()).await
                     }
                 }
             })
-            .buffer_unordered(usize::MAX)
+            .buffer_unordered(self.jobs)
             .collect()
             .await;
 
-        Ok(results
+        // Errors carry their full anyhow context chain until this single boundary,
+        // where they're rendered to strings for the CLI/agent output.
+        Ok(nested
             .into_iter()
-            .filter_map(|r| r.err())
+            .flatten()
             .map(|e| format!("{:#}", e))
             .collect())
     }
@@ -107,50 +111,55 @@ impl Downloader {
         item: &'a RepoItem,
         dest_path: PathBuf,
         progress_callback: &'a (impl Fn(String) + Send + Sync),
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<anyhow::Error>> + Send + 'a>> {
         Box::pin(async move {
             progress_callback(format!("Scanning folder: {}", item.name));
-            fs::create_dir_all(&dest_path)?;
+
+            if let Err(e) = fs::create_dir_all(&dest_path) {
+                return vec![
+                    anyhow::Error::new(e).context(format!("Failed to create folder {}", item.name))
+                ];
+            }
 
             let contents = {
                 let _permit = Arc::clone(&self.semaphore)
                     .acquire_owned()
                     .await
                     .expect("semaphore closed");
-                self.client.fetch_contents(&item.url).await?
+                match self.client.fetch_contents(&item.url).await {
+                    Ok(contents) => contents,
+                    Err(e) => {
+                        return vec![e.context(format!("Failed to list folder {}", item.name))]
+                    }
+                }
                 // permit released here when _permit drops
             };
 
-            let results: Vec<Result<()>> = futures::stream::iter(contents)
+            let nested: Vec<Vec<anyhow::Error>> = futures::stream::iter(contents)
                 .map(|sub_item| {
                     let sub_dest_path = dest_path.join(&sub_item.name);
                     async move {
                         if sub_item.is_file() {
-                            self.download_file(&sub_item, sub_dest_path, progress_callback)
+                            match self
+                                .download_file(&sub_item, sub_dest_path, progress_callback)
                                 .await
-                                .with_context(|| format!("Failed to download {}", sub_item.name))
+                            {
+                                Ok(()) => vec![],
+                                Err(e) => {
+                                    vec![e.context(format!("Failed to download {}", sub_item.name))]
+                                }
+                            }
                         } else {
                             self.download_folder(&sub_item, sub_dest_path, progress_callback)
                                 .await
-                                .with_context(|| format!("Failed to download {}", sub_item.name))
                         }
                     }
                 })
-                .buffer_unordered(usize::MAX)
+                .buffer_unordered(self.jobs)
                 .collect()
                 .await;
 
-            let errors: Vec<String> = results
-                .into_iter()
-                .filter_map(|r| r.err())
-                .map(|e| format!("{:#}", e))
-                .collect();
-
-            if !errors.is_empty() {
-                return Err(anyhow::anyhow!("{}", errors.join("\n")));
-            }
-
-            Ok(())
+            nested.into_iter().flatten().collect()
         })
     }
 }
