@@ -1,5 +1,6 @@
 use crate::agent::{self, AgentEnvelope};
 use crate::config::Config;
+use crate::download::DEFAULT_JOBS;
 use crate::release::{self, FileTypePreference, ReleaseRequest, ReleaseSelectionCancelled};
 use crate::ui;
 use anyhow::Result;
@@ -29,6 +30,9 @@ pub struct Cli {
         help = "One-time GitHub token (not stored). Use `auto`/`gh` to read from GitHub CLI"
     )]
     token: Option<String>,
+
+    #[arg(long, short = 'j', default_value_t = DEFAULT_JOBS, value_parser = parse_jobs, help = "Number of parallel downloads (1–64)")]
+    jobs: usize,
 }
 
 #[derive(Subcommand)]
@@ -126,6 +130,10 @@ enum AgentCommand {
             help = "One-time GitHub token for this run. Use `auto`/`gh` to read from GitHub CLI"
         )]
         token: Option<String>,
+        #[arg(long, short = 'j', default_value_t = DEFAULT_JOBS, value_parser = parse_jobs, help = "Number of parallel downloads (1–64)")]
+        jobs: usize,
+        #[arg(long, help = "Print output as JSON (for scripting)")]
+        json: bool,
     },
 }
 
@@ -219,18 +227,45 @@ pub async fn run() -> Result<()> {
                 no_folder,
                 out,
                 token,
+                jobs,
+                json,
             } => {
                 let token = resolve_github_token(token, default_config.github_token.clone())?;
                 let out = out.or(default_config.download_path.clone());
                 let selected_paths = build_download_request(paths, repo, subtree);
                 let result = match selected_paths {
                     Ok(selected_paths) => {
-                        agent::download_paths(&url, token, &selected_paths, out, cwd, no_folder)
-                            .await
+                        agent::download_paths(
+                            &url,
+                            token,
+                            &selected_paths,
+                            out,
+                            cwd,
+                            no_folder,
+                            jobs,
+                        )
+                        .await
                     }
                     Err(error) => Err(error),
                 };
-                print_agent_json("download", result)?;
+                if json {
+                    print_agent_json("download", result)?;
+                } else {
+                    let data = result?;
+                    if data.errors.is_empty() {
+                        println!(
+                            "Downloaded {} files to {}",
+                            data.downloaded_paths.len(),
+                            data.output_dir
+                        );
+                    } else {
+                        eprintln!("Completed with {} error(s):", data.errors.len());
+                        for err in &data.errors {
+                            eprintln!("  - {}", err);
+                        }
+                        std::process::exit(1);
+                    }
+                }
             }
         },
         Some(Commands::Release {
@@ -291,6 +326,7 @@ pub async fn run() -> Result<()> {
                 download_path,
                 cli.cwd,
                 cli.no_folder,
+                cli.jobs,
                 initial_icon_mode,
             )
             .await?;
@@ -303,6 +339,17 @@ pub async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_jobs(s: &str) -> Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("'{}' is not a valid number", s))?;
+    if !(1..=64).contains(&n) {
+        Err(format!("--jobs must be between 1 and 64 (got {})", n))
+    } else {
+        Ok(n)
+    }
 }
 
 fn resolve_github_token(

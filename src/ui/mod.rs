@@ -118,6 +118,7 @@ pub struct AppState {
     pub folder_sizes: HashMap<String, u64>,
     pub cwd: bool,
     pub no_folder: bool,
+    pub jobs: usize,
     pub is_searching: bool,
     pub search_query: String,
     pub selected_paths: HashSet<String>,
@@ -162,6 +163,7 @@ impl AppState {
             folder_sizes: HashMap::new(),
             cwd: false,
             no_folder: false,
+            jobs: crate::download::DEFAULT_JOBS,
             is_searching: false,
             search_query: String::new(),
             selected_paths: HashSet::new(),
@@ -416,6 +418,7 @@ pub async fn run_tui(
     download_path: Option<String>,
     cwd: bool,
     no_folder: bool,
+    jobs: usize,
     icon_mode: IconMode,
 ) -> Result<IconMode> {
     install_panic_hook();
@@ -432,6 +435,7 @@ pub async fn run_tui(
     state_init.download_path = download_path;
     state_init.cwd = cwd;
     state_init.no_folder = no_folder;
+    state_init.jobs = jobs;
     state_init.icon_mode = icon_mode;
 
     let has_initial_url = initial_url.is_some();
@@ -1271,7 +1275,7 @@ async fn load_repo(state: Arc<Mutex<AppState>>, _client: GitHubClient, mut gh_ur
 
 async fn perform_download(state: Arc<Mutex<AppState>>) -> Result<()> {
     use crate::download::Downloader;
-    let (items_to_download, _repo_path, repo_name, token, custom_path, cwd, no_folder) = {
+    let (items_to_download, _repo_path, repo_name, token, custom_path, cwd, no_folder, jobs) = {
         let s = state.lock().await;
         if let Some(url) = &s.current_url {
             let selected = s.get_selected_items();
@@ -1312,6 +1316,7 @@ async fn perform_download(state: Arc<Mutex<AppState>>) -> Result<()> {
                 s.download_path.clone(),
                 s.cwd,
                 s.no_folder,
+                s.jobs,
             )
         } else {
             return Ok(());
@@ -1342,7 +1347,7 @@ async fn perform_download(state: Arc<Mutex<AppState>>) -> Result<()> {
             .unwrap_or(crate::github::Platform::GitHub)
     };
     let download_client = GitHubClient::new_for_platform(token, platform)?;
-    let downloader = Downloader::new(download_dir.clone(), download_client)?;
+    let downloader = Downloader::new(download_dir.clone(), download_client, jobs)?;
     let state_c = state.clone();
 
     let result = downloader
