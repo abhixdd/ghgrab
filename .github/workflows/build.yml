@@ -15,13 +15,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux
             target: x86_64-unknown-linux-gnu
             artifact: ghgrab
             release_name: ghgrab-linux
 
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux-arm64
             target: aarch64-unknown-linux-gnu
             artifact: ghgrab
@@ -149,7 +149,15 @@ jobs:
           name: checksums
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: |
+          for i in 1 2 3; do
+            if npm publish --provenance --access public; then
+              exit 0
+            fi
+            echo "npm publish failed (attempt $i/3), retrying in 20s..."
+            sleep 20
+          done
+          exit 1
 
   publish-pypi:
     needs: release

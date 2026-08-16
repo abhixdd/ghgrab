@@ -7,7 +7,7 @@ Repository URLs for the main TUI flow and `agent` commands can target GitHub, Gi
 ## Base command
 
 ```bash
-ghgrab [URL] [--cwd] [--no-folder] [--token TOKEN]
+ghgrab [URL] [--cwd] [--no-folder] [--token TOKEN] [--jobs N]
 ```
 
 ### Global options
@@ -17,6 +17,7 @@ ghgrab [URL] [--cwd] [--no-folder] [--token TOKEN]
 | `--cwd` | Download files to the current working directory |
 | `--no-folder` | Download directly into the target directory without a repository subfolder |
 | `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token without storing it. `auto`/`gh` uses `gh auth token` at runtime |
+| `-j, --jobs <N>` | Number of files to download in parallel, from 1 to 64 (default: 4) |
 
 Typing a keyword at the TUI home screen opens repository search mode. That search flow currently uses GitHub only.
 
@@ -76,13 +77,17 @@ ghgrab rel sharkdp/bat --extract --bin-path ~/.local/bin
 
 ## Agent mode
 
-The `agent` command is designed for non-interactive tooling. It prints a stable JSON envelope with:
+The `agent` command is designed for non-interactive tooling.
+
+`agent tree` always prints a stable JSON envelope with:
 
 - `api_version`
 - `ok`
 - `command`
 - `data` on success
 - `error` on failure
+
+`agent download` prints human-readable output by default; pass `--json` to get the same JSON envelope for scripting.
 
 ### Fetch a repository tree
 
@@ -114,6 +119,16 @@ ghgrab agent download https://github.com/rust-lang/rust --subtree src/tools --ou
 ghgrab agent download https://github.com/rust-lang/rust --repo --out ./tmp
 ```
 
+### Parallel downloads
+
+Downloads run concurrently. Control how many files download at once with `-j/--jobs` (1–64, default: 4):
+
+```bash
+ghgrab agent download https://github.com/rust-lang/rust --repo --out ./tmp --jobs 8
+```
+
+Higher values speed up large downloads but increase the chance of hitting GitHub rate limits.
+
 ### Agent command rules
 
 - `agent download --repo` cannot be combined with positional paths.
@@ -138,6 +153,8 @@ ghgrab agent download https://github.com/rust-lang/rust --repo --out ./tmp
 | `--no-folder` | Skip the repository subfolder |
 | `--out <DIR>` | Use a custom output directory |
 | `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token. `auto`/`gh` uses `gh auth token` at runtime |
+| `-j, --jobs <N>` | Number of files to download in parallel, from 1 to 64 (default: 4) |
+| `--json` | Print the JSON envelope instead of human-readable output |
 
 ## Configuration
 
