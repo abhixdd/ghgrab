@@ -310,7 +310,8 @@ We've kept it pretty standard, but here's a quick cheat sheet:
 | `p` / `P`                         | **Preview** current file                                                 |
 | `a`                               | Select All items                                                         |
 | `u`                               | Unselect all items                                                       |
-| `d` / `D`                         | Download selected items                                                  |
+| `d`                               | Download selected items                                                  |
+| `D`                               | Download selected items to a chosen folder                               |
 | `i`                               | Toggle Icons (Emoji / ASCII)                                             |
 | `g` / `Home`                      | Jump to Top                                                              |
 | `G` / `End`                       | Jump to Bottom                                                           |
