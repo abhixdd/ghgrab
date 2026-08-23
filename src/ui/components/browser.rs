@@ -325,6 +325,14 @@ pub fn render(f: &mut Frame, area: Rect, state: &BrowserState) {
         Span::styled(" Download", Style::default().fg(BORDER_COLOR())),
         Span::styled("  │  ", Style::default().fg(BORDER_COLOR())),
         Span::styled(
+            "D",
+            Style::default()
+                .fg(SUCCESS_COLOR())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" Save to", Style::default().fg(BORDER_COLOR())),
+        Span::styled("  │  ", Style::default().fg(BORDER_COLOR())),
+        Span::styled(
             "p",
             Style::default()
                 .fg(WARNING_COLOR())

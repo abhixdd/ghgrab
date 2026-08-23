@@ -34,6 +34,7 @@ pub enum AppMode {
     RepositorySearch,
     Browse,
     Preview,
+    DestinationPrompt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -132,6 +133,8 @@ pub struct AppState {
     pub search_query_version: u64,
     pub search_loading: bool,
     pub search_filters: RepoSearchFilters,
+    pub dest_input: String,
+    pub dest_cursor: usize,
 }
 
 impl Default for AppState {
@@ -177,7 +180,21 @@ impl AppState {
             search_query_version: 0,
             search_loading: false,
             search_filters: RepoSearchFilters::default(),
+            dest_input: String::new(),
+            dest_cursor: 0,
         }
+    }
+
+    pub fn open_dest_prompt(&mut self, prefill: String) {
+        self.dest_cursor = prefill.chars().count();
+        self.dest_input = prefill;
+        self.mode = AppMode::DestinationPrompt;
+    }
+
+    pub fn close_dest_prompt(&mut self) {
+        self.dest_input.clear();
+        self.dest_cursor = 0;
+        self.mode = AppMode::Browse;
     }
 
     pub fn show_toast(&mut self, message: String, type_: ToastType) {
@@ -543,7 +560,7 @@ async fn event_loop(
                         };
                         components::repo_search::render(f, size, &repo_search_state);
                     }
-                    AppMode::Browse => {
+                    AppMode::Browse | AppMode::DestinationPrompt => {
                         let filtered_items = state_lock.get_view_items();
 
                         let browser_state = components::browser::BrowserState {
@@ -559,6 +576,17 @@ async fn event_loop(
                             search_query: &state_lock.search_query,
                         };
                         components::browser::render(f, size, &browser_state);
+
+                        if state_lock.mode == AppMode::DestinationPrompt {
+                            let cursor_visible = (frame_count / 5) % 2 == 0;
+                            components::dest_prompt::render(
+                                f,
+                                size,
+                                &state_lock.dest_input,
+                                state_lock.dest_cursor,
+                                cursor_visible,
+                            );
+                        }
                     }
                     AppMode::Preview => {
                         let s = &mut *state_lock;
@@ -1044,7 +1072,7 @@ async fn handle_input(
                         }
                     }
                 }
-                KeyCode::Char('d') | KeyCode::Char('D') if !s.is_searching => {
+                KeyCode::Char('d') if !s.is_searching => {
                     if s.get_selected_items().is_empty() {
                         s.show_toast("No items selected!".to_string(), ToastType::Info);
                     } else {
@@ -1053,13 +1081,23 @@ async fn handle_input(
 
                         let s_clone = state.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = perform_download(s_clone.clone()).await {
+                            if let Err(e) = perform_download(s_clone.clone(), None).await {
                                 let mut s = s_clone.lock().await;
                                 s.downloading = false;
                                 s.status_message = String::new();
                                 s.show_toast(format!("Download failed: {}", e), ToastType::Error);
                             }
                         });
+                    }
+                }
+                KeyCode::Char('D') if !s.is_searching => {
+                    if s.get_selected_items().is_empty() {
+                        s.show_toast("No items selected!".to_string(), ToastType::Info);
+                    } else {
+                        let prefill = resolve_download_dir(None, s.cwd, s.download_path.as_deref())
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default();
+                        s.open_dest_prompt(prefill);
                     }
                 }
                 _ => {}
@@ -1073,6 +1111,102 @@ async fn handle_input(
             | KeyCode::Left
             | KeyCode::Char('h') => {
                 s.mode = AppMode::Browse;
+            }
+            _ => {}
+        },
+        AppMode::DestinationPrompt => match key.code {
+            KeyCode::Char('w') | KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                s.dest_input.clear();
+                s.dest_cursor = 0;
+            }
+            KeyCode::Char(c)
+                if !key.modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                let byte_pos = s
+                    .dest_input
+                    .char_indices()
+                    .nth(s.dest_cursor)
+                    .map(|(i, _)| i)
+                    .unwrap_or(s.dest_input.len());
+                s.dest_input.insert(byte_pos, c);
+                s.dest_cursor += 1;
+            }
+            KeyCode::Backspace => {
+                if s.dest_cursor > 0 {
+                    let byte_pos = s
+                        .dest_input
+                        .char_indices()
+                        .nth(s.dest_cursor - 1)
+                        .map(|(i, _)| i)
+                        .unwrap();
+                    s.dest_input.remove(byte_pos);
+                    s.dest_cursor -= 1;
+                }
+            }
+            KeyCode::Delete => {
+                if s.dest_cursor < s.dest_input.chars().count() {
+                    let byte_pos = s
+                        .dest_input
+                        .char_indices()
+                        .nth(s.dest_cursor)
+                        .map(|(i, _)| i)
+                        .unwrap();
+                    s.dest_input.remove(byte_pos);
+                }
+            }
+            KeyCode::Left if s.dest_cursor > 0 => {
+                s.dest_cursor -= 1;
+            }
+            KeyCode::Right if s.dest_cursor < s.dest_input.chars().count() => {
+                s.dest_cursor += 1;
+            }
+            KeyCode::Left | KeyCode::Right => {}
+            KeyCode::Home => {
+                s.dest_cursor = 0;
+            }
+            KeyCode::End => {
+                s.dest_cursor = s.dest_input.chars().count();
+            }
+            KeyCode::Esc => {
+                s.close_dest_prompt();
+            }
+            KeyCode::Enter => {
+                let dest = s.dest_input.trim().to_string();
+                if dest.is_empty() {
+                    s.show_toast(
+                        "Destination cannot be empty!".to_string(),
+                        ToastType::Warning,
+                    );
+                } else {
+                    match crate::config::Config::validate_path(&dest) {
+                        Err(e) => {
+                            s.show_toast(format!("Invalid destination: {}", e), ToastType::Error);
+                        }
+                        Ok(()) => {
+                            s.close_dest_prompt();
+                            s.downloading = true;
+                            drop(s);
+
+                            let s_clone = state.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = perform_download(s_clone.clone(), Some(dest)).await
+                                {
+                                    let mut s = s_clone.lock().await;
+                                    s.downloading = false;
+                                    s.status_message = String::new();
+                                    s.show_toast(
+                                        format!("Download failed: {}", e),
+                                        ToastType::Error,
+                                    );
+                                }
+                            });
+                        }
+                    }
+                }
             }
             _ => {}
         },
@@ -1273,7 +1407,31 @@ async fn load_repo(state: Arc<Mutex<AppState>>, _client: GitHubClient, mut gh_ur
     }
 }
 
-async fn perform_download(state: Arc<Mutex<AppState>>) -> Result<()> {
+/// Resolves the base download directory. Priority: explicit destination
+/// (from the `D` prompt) > `--cwd` > configured path > user Downloads folder.
+pub fn resolve_download_dir(
+    dest_override: Option<&str>,
+    cwd: bool,
+    custom_path: Option<&str>,
+) -> Result<std::path::PathBuf> {
+    if let Some(dest) = dest_override {
+        return Ok(std::path::PathBuf::from(dest));
+    }
+    if cwd {
+        return std::env::current_dir().context("Could not get current working directory");
+    }
+    if let Some(path) = custom_path {
+        return Ok(std::path::PathBuf::from(path));
+    }
+    dirs::download_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+        .context("Could not find User Downloads directory")
+}
+
+async fn perform_download(
+    state: Arc<Mutex<AppState>>,
+    dest_override: Option<String>,
+) -> Result<()> {
     use crate::download::Downloader;
     let (items_to_download, _repo_path, repo_name, token, custom_path, cwd, no_folder, jobs) = {
         let s = state.lock().await;
@@ -1323,15 +1481,7 @@ async fn perform_download(state: Arc<Mutex<AppState>>) -> Result<()> {
         }
     };
 
-    let download_dir = if cwd {
-        std::env::current_dir().context("Could not get current working directory")?
-    } else if let Some(path) = custom_path {
-        std::path::PathBuf::from(path)
-    } else {
-        dirs::download_dir()
-            .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
-            .context("Could not find User Downloads directory")?
-    };
+    let download_dir = resolve_download_dir(dest_override.as_deref(), cwd, custom_path.as_deref())?;
 
     let download_dir = if no_folder {
         download_dir

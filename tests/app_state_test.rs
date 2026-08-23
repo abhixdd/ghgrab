@@ -461,6 +461,49 @@ fn test_repo_search_sort_modes() {
 }
 
 #[test]
+fn test_dest_prompt_open_and_close() {
+    use ghgrab::ui::AppMode;
+    let mut state = AppState::new();
+    state.mode = AppMode::Browse;
+
+    state.open_dest_prompt("/tmp/downloads".to_string());
+    assert_eq!(state.mode, AppMode::DestinationPrompt);
+    assert_eq!(state.dest_input, "/tmp/downloads");
+    assert_eq!(state.dest_cursor, "/tmp/downloads".chars().count());
+
+    state.close_dest_prompt();
+    assert_eq!(state.mode, AppMode::Browse);
+    assert!(state.dest_input.is_empty());
+    assert_eq!(state.dest_cursor, 0);
+}
+
+#[test]
+fn test_dest_prompt_unicode_prefill_cursor() {
+    let mut state = AppState::new();
+    state.open_dest_prompt("cartella-università".to_string());
+    // Cursor is measured in chars, not bytes
+    assert_eq!(state.dest_cursor, "cartella-università".chars().count());
+}
+
+#[test]
+fn test_resolve_download_dir_priority() {
+    use ghgrab::ui::resolve_download_dir;
+    use std::path::PathBuf;
+
+    // Explicit destination wins over everything
+    let dir = resolve_download_dir(Some("/explicit/dest"), true, Some("/configured")).unwrap();
+    assert_eq!(dir, PathBuf::from("/explicit/dest"));
+
+    // --cwd wins over the configured path
+    let dir = resolve_download_dir(None, true, Some("/configured")).unwrap();
+    assert_eq!(dir, std::env::current_dir().unwrap());
+
+    // Configured path is used when no override or --cwd is present
+    let dir = resolve_download_dir(None, false, Some("/configured")).unwrap();
+    assert_eq!(dir, PathBuf::from("/configured"));
+}
+
+#[test]
 fn test_cancel_repo_search_invalidates_pending_results() {
     let mut state = AppState::new();
     state.search_query_version = 5;
