@@ -184,3 +184,53 @@ Behavior:
 - Uses `gh auth token` at runtime only.
 - Never prints the raw token.
 - If multiple token lines are returned, `ghgrab` reports that multiple tokens were found and uses one token.
+
+## MCP (Model Context Protocol) Server
+
+`ghgrab` can act as an MCP server, letting AI coding assistants (Cursor, Claude Desktop, VS Code, Windsurf) search repositories, browse trees, download files/folders, read file contents, and download release assets directly.
+
+### Auto-installation
+
+```bash
+ghgrab mcp --install
+```
+
+This interactive command will:
+
+1. Detect which supported clients are installed on your machine.
+2. Prompt you to select one.
+3. Append a `ghgrab mcp` server entry to that client's configuration file.
+4. Pass through your saved GitHub token (if set via `ghgrab config`) so the AI client doesn't hit anonymous API rate limits.
+
+### Manual configuration
+
+Add the following to your client's MCP configuration file (e.g. `claude_desktop_config.json` or `mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "ghgrab": {
+      "command": "ghgrab",
+      "args": ["mcp"],
+      "env": {
+        "GITHUB_TOKEN": "your_github_token_here"
+      }
+    }
+  }
+}
+```
+
+The `env.GITHUB_TOKEN` block is optional but recommended to avoid GitHub API rate limiting.
+
+### Exposed tools
+
+| Tool | Description |
+| --- | --- |
+| `repo_tree` | Lists all files and directories in a Git repository (GitHub, GitLab, Codeberg, Gitea, Forgejo) |
+| `download_files` | Downloads specific files or folders from a repository to the local filesystem |
+| `download_release` | Downloads a GitHub release asset with OS/arch auto-detection (runs non-interactively) |
+| `search_repos` | Searches GitHub repositories by keyword |
+| `read_file` | Reads the raw text content of a single file from a repository |
+| `read_file_preview` | Reads a preview (first N bytes) of a file from a repository |
+| `list_releases` | Lists all releases for a GitHub repository |
+| `repo_info` | Gets repository metadata: default branch, platform type, parsed URL components |
