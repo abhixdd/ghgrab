@@ -16,12 +16,10 @@ fn test_mcp_handshake_and_tools_list() {
     let stdout = child.stdout.take().expect("Failed to open stdout");
     let mut reader = BufReader::new(stdout);
 
-    // 1. Send initialize request
     let init_req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}}"#;
     writeln!(stdin, "{}", init_req).expect("Failed to write to stdin");
     stdin.flush().expect("Failed to flush stdin");
 
-    // Read initialize response
     let mut init_resp_line = String::new();
     reader
         .read_line(&mut init_resp_line)
@@ -33,17 +31,14 @@ fn test_mcp_handshake_and_tools_list() {
     assert_eq!(init_resp["result"]["protocolVersion"], "2024-11-05");
     assert_eq!(init_resp["result"]["serverInfo"]["name"], "rmcp");
 
-    // 2. Send initialized notification
     let initialized_notif = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
     writeln!(stdin, "{}", initialized_notif).expect("Failed to write notification to stdin");
     stdin.flush().expect("Failed to flush stdin");
 
-    // 3. Send tools/list request
     let list_req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
     writeln!(stdin, "{}", list_req).expect("Failed to write tools/list to stdin");
     stdin.flush().expect("Failed to flush stdin");
 
-    // Read tools/list response
     let mut list_resp_line = String::new();
     reader
         .read_line(&mut list_resp_line)
@@ -71,7 +66,6 @@ fn test_mcp_handshake_and_tools_list() {
     assert!(tool_names.contains(&"list_releases"));
     assert!(tool_names.contains(&"repo_info"));
 
-    // Gracefully shutdown child by dropping stdin
     drop(stdin);
     let status = child.wait().expect("Failed to wait on child process");
     assert!(status.success());
@@ -91,7 +85,6 @@ fn test_mcp_repo_info_on_actual_repo() {
     let stdout = child.stdout.take().expect("Failed to open stdout");
     let mut reader = BufReader::new(stdout);
 
-    // 1. Send initialize request
     let init_req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}}"#;
     writeln!(stdin, "{}", init_req).expect("Failed to write to stdin");
     stdin.flush().expect("Failed to flush stdin");
@@ -101,12 +94,10 @@ fn test_mcp_repo_info_on_actual_repo() {
         .read_line(&mut init_resp_line)
         .expect("Failed to read from stdout");
 
-    // 2. Send initialized notification
     let initialized_notif = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
     writeln!(stdin, "{}", initialized_notif).expect("Failed to write notification to stdin");
     stdin.flush().expect("Failed to flush stdin");
 
-    // 3. Call repo_info tool
     let call_req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"repo_info","arguments":{"url":"https://github.com/abhixdd/ghgrab"}}}"#;
     writeln!(stdin, "{}", call_req).expect("Failed to write tools/call to stdin");
     stdin.flush().expect("Failed to flush stdin");
@@ -122,7 +113,6 @@ fn test_mcp_repo_info_on_actual_repo() {
 
     println!("Call response: {:?}", call_resp);
 
-    // Assert either structured result or structured error (like rate limiting, auth issues, or offline)
     let result = &call_resp["result"];
     if result["isError"].as_bool().unwrap_or(false) {
         let err_msg = result["content"][0]["text"].as_str().unwrap_or_default();
@@ -131,7 +121,6 @@ fn test_mcp_repo_info_on_actual_repo() {
             err_msg
         );
     } else {
-        // Successful response structure: MCP CallToolResult structured contains content
         let content_text = result["content"][0]["text"]
             .as_str()
             .expect("text should be present");

@@ -115,7 +115,12 @@ pub fn install_mcp_client(existing_token: Option<String>) -> Result<()> {
 
     let mut config: Value = if selected_client.path.exists() {
         let content = fs::read_to_string(&selected_client.path)?;
-        serde_json::from_str(&content).unwrap_or(json!({}))
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "Existing config at {} is not valid JSON; refusing to overwrite it. Please fix or remove it manually.",
+                selected_client.path.display()
+            )
+        })?
     } else {
         json!({})
     };

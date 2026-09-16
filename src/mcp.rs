@@ -96,7 +96,12 @@ impl GhGrabMcp {
     )]
     async fn repo_tree(&self, Parameters(params): Parameters<RepoTreeParams>) -> CallToolResult {
         match agent::fetch_tree(&params.url, self.token.clone()).await {
-            Ok(res) => CallToolResult::structured(serde_json::to_value(res).unwrap()),
+            Ok(res) => match serde_json::to_value(res) {
+                Ok(v) => CallToolResult::structured(v),
+                Err(e) => CallToolResult::structured_error(serde_json::json!({
+                    "error": format!("Failed to serialize repo tree: {}", e)
+                })),
+            },
             Err(e) => CallToolResult::structured_error(serde_json::json!({
                 "error": format!("Failed to fetch repo tree: {}", e)
             })),
@@ -123,7 +128,12 @@ impl GhGrabMcp {
         )
         .await
         {
-            Ok(res) => CallToolResult::structured(serde_json::to_value(res).unwrap()),
+            Ok(res) => match serde_json::to_value(res) {
+                Ok(v) => CallToolResult::structured(v),
+                Err(e) => CallToolResult::structured_error(serde_json::json!({
+                    "error": format!("Failed to serialize download result: {}", e)
+                })),
+            },
             Err(e) => CallToolResult::structured_error(serde_json::json!({
                 "error": format!("Failed to download files: {}", e)
             })),
@@ -148,7 +158,7 @@ impl GhGrabMcp {
             cwd: false,
             bin_path: None,
             token: self.token.clone(),
-            allow_prompt: false, // Ensure non-interactive
+            allow_prompt: false,
         };
 
         match release::download_release(req).await {
@@ -183,7 +193,12 @@ impl GhGrabMcp {
         };
 
         match client.search_repositories(&params.query).await {
-            Ok(repos) => CallToolResult::structured(serde_json::to_value(repos).unwrap()),
+            Ok(repos) => match serde_json::to_value(repos) {
+                Ok(v) => CallToolResult::structured(v),
+                Err(e) => CallToolResult::structured_error(serde_json::json!({
+                    "error": format!("Failed to serialize search results: {}", e)
+                })),
+            },
             Err(e) => CallToolResult::structured_error(serde_json::json!({
                 "error": format!("Search failed: {}", e)
             })),
@@ -274,7 +289,12 @@ impl GhGrabMcp {
         };
 
         match client.fetch_releases(&params.owner, &params.repo).await {
-            Ok(releases) => CallToolResult::structured(serde_json::to_value(releases).unwrap()),
+            Ok(releases) => match serde_json::to_value(releases) {
+                Ok(v) => CallToolResult::structured(v),
+                Err(e) => CallToolResult::structured_error(serde_json::json!({
+                    "error": format!("Failed to serialize releases: {}", e)
+                })),
+            },
             Err(e) => CallToolResult::structured_error(serde_json::json!({
                 "error": format!("Failed to list releases: {}", e)
             })),
