@@ -110,6 +110,7 @@ pub async fn download_paths(
     output_path: Option<String>,
     cwd: bool,
     no_folder: bool,
+    jobs: usize,
 ) -> Result<AgentDownloadResponse> {
     let gh_url = GitHubUrl::parse(url)?;
     let client = GitHubClient::new_for_url(token.clone(), &gh_url)?;
@@ -130,7 +131,7 @@ pub async fn download_paths(
     };
 
     let download_client = GitHubClient::new_for_url(token, &gh_url)?;
-    let downloader = Downloader::new(download_dir.clone(), download_client)?;
+    let downloader = Downloader::new(download_dir.clone(), download_client, jobs)?;
     let errors = downloader
         .download_items(&items_to_download, "", |_| {})
         .await?;

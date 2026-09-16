@@ -1,4 +1,5 @@
 use crate::agent;
+use crate::download::DEFAULT_JOBS;
 use crate::github::{GitHubClient, GitHubUrl};
 use crate::release;
 use anyhow::Result;
@@ -118,6 +119,7 @@ impl GhGrabMcp {
             output,
             false,
             no_folder,
+            DEFAULT_JOBS,
         )
         .await
         {

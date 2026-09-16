@@ -56,7 +56,8 @@ Release downloads are currently GitHub-only.
 | `Backspace` / `h` / `Left` | Go to the previous folder |
 | `/` | Start searching within the current file list |
 | `Space` | Toggle selection |
-| `d` / `D` | Download selected items |
+| `d` | Download selected items |
+| `D` | Download selected items to a chosen folder |
 | `p` / `P` | Preview the current file |
 | `a` | Select all items |
 | `u` | Clear all selections |
