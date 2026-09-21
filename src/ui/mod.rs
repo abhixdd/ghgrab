@@ -198,6 +198,9 @@ impl AppState {
     }
 
     pub fn show_toast(&mut self, message: String, type_: ToastType) {
+        if type_ == ToastType::Error {
+            crate::config::log_error(&message);
+        }
         self.toast = Some(Toast::new(message, type_));
     }
 

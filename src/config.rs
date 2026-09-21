@@ -90,6 +90,36 @@ fn get_config_path() -> Result<PathBuf> {
     Ok(path)
 }
 
+fn get_log_path() -> Result<PathBuf> {
+    let mut path = dirs::config_dir().context("Could not find config directory")?;
+    path.push("ghgrab");
+    path.push("ghgrab.log");
+    Ok(path)
+}
+
+pub fn log_error(message: &str) {
+    let Ok(log_path) = get_log_path() else {
+        return;
+    };
+    if let Some(parent) = log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    use std::io::Write;
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = writeln!(file, "[{}] {}", timestamp, message);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
