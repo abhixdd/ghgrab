@@ -473,7 +473,7 @@ impl GitHubClient {
 
     fn build(token: Option<String>, platform: Platform) -> Result<Self> {
         let client = reqwest::Client::builder()
-            .user_agent("ghgrab/2.1.0")
+            .user_agent("ghgrab/2.2.0")
             .build()
             .context("Failed to create HTTP client")?;
         Ok(GitHubClient {
