@@ -66,6 +66,12 @@ enum Commands {
         out: Option<String>,
         #[arg(long, help = "Install the selected binary into the provided directory")]
         bin_path: Option<String>,
+        #[arg(
+            long,
+            requires = "bin_path",
+            help = "File name for the installed binary (defaults to the repo name when the asset has a platform suffix)"
+        )]
+        bin_name: Option<String>,
         #[arg(long, help = "Download files to current directory")]
         cwd: bool,
         #[arg(
@@ -290,6 +296,7 @@ pub async fn run() -> Result<()> {
             extract,
             out,
             bin_path,
+            bin_name,
             cwd,
             token,
         }) => {
@@ -306,6 +313,7 @@ pub async fn run() -> Result<()> {
                 output_path: out.or(default_config.download_path.clone()),
                 cwd,
                 bin_path,
+                bin_name,
                 token,
                 allow_prompt: true,
             })

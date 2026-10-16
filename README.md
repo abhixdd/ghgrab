@@ -141,7 +141,8 @@ Basic release flags:
 | `--asset-regex <REGEX>` | Match a specific release asset by regex. |
 | `--extract` | Extract archive assets after download. |
 | `--out <DIR>` | Download into a custom output directory. |
-| `--bin-path <DIR>` | Copy the selected file or extracted binary into the provided directory. |
+| `--bin-path <DIR>` | Copy the selected file or extracted binary into the provided directory. Platform suffixes are dropped, so `tool-linux-amd64` installs as `tool`. |
+| `--bin-name <NAME>` | Set the installed file name explicitly (requires `--bin-path`). |
 | `--os <OS>` | Override detected operating system. |
 | `--arch <ARCH>` | Override detected architecture. |
 
@@ -190,7 +191,8 @@ ghgrab rel starship/starship --prerelease
 | `--file-type <TYPE>` | Prefer `any`, `archive`, or `binary` assets. |
 | `--extract` | Extract archive assets after download. Supports `.zip`, `.tar.gz`, `.tgz`, and `.tar.xz`. |
 | `--out <DIR>` | Download into a custom output directory. |
-| `--bin-path <DIR>` | Copy the selected file or extracted binary into the provided directory. |
+| `--bin-path <DIR>` | Copy the selected file or extracted binary into the provided directory. Platform suffixes are dropped, so `tool-linux-amd64` installs as `tool`. |
+| `--bin-name <NAME>` | Set the installed file name explicitly (requires `--bin-path`). |
 | `--cwd` | Download into the current working directory. |
 | `--token <TOKEN/AUTO/GH>` | Use a one-time GitHub token for this run without saving it. `auto`/`gh` uses `gh auth token` at runtime. |
 
@@ -205,6 +207,9 @@ ghgrab rel sharkdp/bat --asset-regex "x86_64.*windows.*zip"
 
 # Install an extracted binary into your local bin directory
 ghgrab rel sharkdp/bat --extract --bin-path ~/.local/bin
+
+# Install under a custom name
+ghgrab rel abhixdd/ghgrab --bin-path ~/bin --bin-name gg
 
 # Use the long command form
 ghgrab release sharkdp/bat

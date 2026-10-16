@@ -30,6 +30,7 @@ pub struct ReleaseRequest {
     pub output_path: Option<String>,
     pub cwd: bool,
     pub bin_path: Option<String>,
+    pub bin_name: Option<String>,
     pub token: Option<String>,
     pub allow_prompt: bool,
 }
@@ -57,6 +58,9 @@ pub struct ReleaseSelectionCancelled;
 
 pub async fn download_release(request: ReleaseRequest) -> Result<ReleaseDownloadResult> {
     let parsed = parse_repo_reference(&request.repo)?;
+    if let Some(name) = request.bin_name.as_deref() {
+        validate_bin_name(name)?;
+    }
     let client = GitHubClient::new(request.token.clone())?;
     let releases = client
         .fetch_releases(&parsed.owner, &parsed.repo)
@@ -111,12 +115,21 @@ pub async fn download_release(request: ReleaseRequest) -> Result<ReleaseDownload
 
         extract_archive(&download_path, &extract_root)?;
         if let Some(bin_dir) = request.bin_path.as_deref() {
-            let installed =
-                install_best_binary(&extract_root, &PathBuf::from(bin_dir), &parsed.repo)?;
+            let installed = install_best_binary(
+                &extract_root,
+                &PathBuf::from(bin_dir),
+                &parsed.repo,
+                request.bin_name.as_deref(),
+            )?;
             installed_binary = Some(installed.display().to_string());
         }
     } else if let Some(bin_dir) = request.bin_path.as_deref() {
-        let target = install_file(&download_path, &PathBuf::from(bin_dir))?;
+        let target = install_file(
+            &download_path,
+            &PathBuf::from(bin_dir),
+            &parsed.repo,
+            request.bin_name.as_deref(),
+        )?;
         installed_binary = Some(target.display().to_string());
     }
 
@@ -518,7 +531,12 @@ fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
     bail!("Unsupported archive type for '{}'", archive_path.display())
 }
 
-fn install_best_binary(extract_root: &Path, bin_dir: &Path, repo: &str) -> Result<PathBuf> {
+fn install_best_binary(
+    extract_root: &Path,
+    bin_dir: &Path,
+    repo: &str,
+    bin_name: Option<&str>,
+) -> Result<PathBuf> {
     let mut candidates = Vec::new();
     collect_files(extract_root, &mut candidates)?;
     let selected = candidates
@@ -527,16 +545,21 @@ fn install_best_binary(extract_root: &Path, bin_dir: &Path, repo: &str) -> Resul
         .max_by_key(|path| binary_score(path, repo))
         .ok_or_else(|| anyhow!("No installable binary found after extraction"))?;
 
-    install_file(&selected, bin_dir)
+    install_file(&selected, bin_dir, repo, bin_name)
 }
 
-fn install_file(source: &Path, bin_dir: &Path) -> Result<PathBuf> {
+fn install_file(
+    source: &Path,
+    bin_dir: &Path,
+    repo: &str,
+    bin_name: Option<&str>,
+) -> Result<PathBuf> {
     fs::create_dir_all(bin_dir)?;
-    let target = bin_dir.join(
-        source
-            .file_name()
-            .ok_or_else(|| anyhow!("Could not determine target filename"))?,
-    );
+    let source_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("Could not determine target filename"))?;
+    let target = bin_dir.join(installed_file_name(source_name, repo, bin_name));
     fs::copy(source, &target).with_context(|| {
         format!(
             "Failed to copy '{}' to '{}'",
@@ -552,6 +575,39 @@ fn install_file(source: &Path, bin_dir: &Path) -> Result<PathBuf> {
         fs::set_permissions(&target, perms)?;
     }
     Ok(target)
+}
+
+fn validate_bin_name(name: &str) -> Result<()> {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+        bail!("--bin-name must be a plain file name, not a path");
+    }
+    Ok(())
+}
+
+fn installed_file_name(source_name: &str, repo: &str, bin_name: Option<&str>) -> String {
+    let lower = source_name.to_ascii_lowercase();
+    let exe_suffix = if lower.ends_with(".exe") { ".exe" } else { "" };
+
+    if let Some(name) = bin_name {
+        if !exe_suffix.is_empty() && !name.to_ascii_lowercase().ends_with(".exe") {
+            return format!("{}{}", name, exe_suffix);
+        }
+        return name.to_string();
+    }
+
+    let repo_lower = repo.to_ascii_lowercase();
+    let keeps_extension = [".msi", ".dmg", ".pkg", ".jar", ".sh", ".py"]
+        .iter()
+        .any(|ext| lower.ends_with(ext));
+    let has_platform_suffix = lower.len() > repo_lower.len()
+        && lower.starts_with(&repo_lower)
+        && matches!(lower.as_bytes()[repo_lower.len()], b'-' | b'_');
+
+    if has_platform_suffix && !keeps_extension && is_probable_binary(Path::new(source_name)) {
+        return format!("{}{}", &source_name[..repo_lower.len()], exe_suffix);
+    }
+
+    source_name.to_string()
 }
 
 fn collect_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
@@ -719,7 +775,7 @@ mod tests {
         let binary_path = nested.join(binary_name);
         fs::write(&binary_path, b"binary bytes")?;
 
-        let installed = install_best_binary(&extract_root, &bin_dir, "tool")?;
+        let installed = install_best_binary(&extract_root, &bin_dir, "tool", None)?;
         assert_eq!(
             installed.file_name().and_then(|f| f.to_str()),
             Some(binary_name)
@@ -728,5 +784,67 @@ mod tests {
         let _ = fs::remove_dir_all(&extract_root);
         let _ = fs::remove_dir_all(&bin_dir);
         Ok(())
+    }
+
+    #[test]
+    fn installed_name_strips_platform_suffix() {
+        if cfg!(windows) {
+            assert_eq!(
+                installed_file_name("ghgrab-windows-amd64.exe", "ghgrab", None),
+                "ghgrab.exe"
+            );
+        } else {
+            assert_eq!(
+                installed_file_name("ghgrab-linux-amd64", "ghgrab", None),
+                "ghgrab"
+            );
+            assert_eq!(
+                installed_file_name("Ghgrab-1.2.0-x86_64.AppImage", "ghgrab", None),
+                "Ghgrab"
+            );
+            assert_eq!(installed_file_name("yq_linux_amd64", "yq", None), "yq");
+        }
+    }
+
+    #[test]
+    fn installed_name_keeps_unrelated_or_non_binary_names() {
+        assert_eq!(installed_file_name("bat", "bat", None), "bat");
+        assert_eq!(
+            installed_file_name("nvim-linux.tar.gz", "nvim", None),
+            "nvim-linux.tar.gz"
+        );
+        assert_eq!(
+            installed_file_name("tool-setup.msi", "tool", None),
+            "tool-setup.msi"
+        );
+        assert_eq!(installed_file_name("rg-linux", "ripgrep", None), "rg-linux");
+        assert_eq!(
+            installed_file_name("toolbox-linux", "tool", None),
+            "toolbox-linux"
+        );
+    }
+
+    #[test]
+    fn installed_name_uses_explicit_bin_name() {
+        assert_eq!(
+            installed_file_name("whatever-linux-amd64", "repo", Some("mytool")),
+            "mytool"
+        );
+        assert_eq!(
+            installed_file_name("whatever-windows.exe", "repo", Some("mytool")),
+            "mytool.exe"
+        );
+        assert_eq!(
+            installed_file_name("whatever-windows.exe", "repo", Some("mytool.exe")),
+            "mytool.exe"
+        );
+    }
+
+    #[test]
+    fn bin_name_rejects_paths() {
+        assert!(validate_bin_name("tool").is_ok());
+        assert!(validate_bin_name("../tool").is_err());
+        assert!(validate_bin_name("bin/tool").is_err());
+        assert!(validate_bin_name("").is_err());
     }
 }
