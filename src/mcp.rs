@@ -157,6 +157,7 @@ impl GhGrabMcp {
             output_path: params.output_dir.or(self.download_path.clone()),
             cwd: false,
             bin_path: None,
+            bin_name: None,
             token: self.token.clone(),
             allow_prompt: false,
         };

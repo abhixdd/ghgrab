@@ -51,6 +51,9 @@ ghgrab rel sharkdp/bat --extract
 
 # Install an extracted binary into a target directory
 ghgrab rel sharkdp/bat --extract --bin-path ~/.local/bin
+
+# Install under a custom name
+ghgrab rel abhixdd/ghgrab --bin-path ~/bin --bin-name gg
 ```
 
 ### Release options
@@ -65,7 +68,8 @@ ghgrab rel sharkdp/bat --extract --bin-path ~/.local/bin
 | `--file-type <TYPE>` | Prefer `any`, `archive`, or `binary` assets |
 | `--extract` | Extract archive assets after download |
 | `--out <DIR>` | Use a custom output directory |
-| `--bin-path <DIR>` | Install the selected file or binary into the provided directory (use `--extract` for archive assets) |
+| `--bin-path <DIR>` | Install the selected file or binary into the provided directory (use `--extract` for archive assets). Names like `tool-linux-amd64` or `tool-x86_64.AppImage` are installed as `tool` |
+| `--bin-name <NAME>` | Set the installed file name explicitly (requires `--bin-path`; `.exe` is kept on Windows) |
 | `--cwd` | Download into the current working directory |
 | `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token for this run. `auto`/`gh` uses `gh auth token` at runtime |
 
