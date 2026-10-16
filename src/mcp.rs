@@ -1,6 +1,6 @@
 use crate::agent;
 use crate::download::DEFAULT_JOBS;
-use crate::github::{GitHubClient, GitHubUrl};
+use crate::github::{Credentials, GitHubClient, GitHubUrl};
 use crate::release;
 use anyhow::Result;
 use rmcp::handler::server::wrapper::Parameters;
@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 #[derive(Clone)]
 pub struct GhGrabMcp {
-    pub token: Option<String>,
+    pub credentials: Credentials,
     pub download_path: Option<String>,
 }
 
@@ -95,7 +95,7 @@ impl GhGrabMcp {
         description = "List all files and directories in a Git repository. Supports GitHub, GitLab, Codeberg, Gitea, and Forgejo."
     )]
     async fn repo_tree(&self, Parameters(params): Parameters<RepoTreeParams>) -> CallToolResult {
-        match agent::fetch_tree(&params.url, self.token.clone()).await {
+        match agent::fetch_tree(&params.url, &self.credentials).await {
             Ok(res) => match serde_json::to_value(res) {
                 Ok(v) => CallToolResult::structured(v),
                 Err(e) => CallToolResult::structured_error(serde_json::json!({
@@ -119,7 +119,7 @@ impl GhGrabMcp {
         let no_folder = params.no_folder.unwrap_or(false);
         match agent::download_paths(
             &params.url,
-            self.token.clone(),
+            &self.credentials,
             &params.paths,
             output,
             false,
@@ -158,7 +158,7 @@ impl GhGrabMcp {
             cwd: false,
             bin_path: None,
             bin_name: None,
-            token: self.token.clone(),
+            token: self.credentials.github.clone(),
             allow_prompt: false,
         };
 
@@ -183,7 +183,7 @@ impl GhGrabMcp {
         &self,
         Parameters(params): Parameters<SearchReposParams>,
     ) -> CallToolResult {
-        let client_res = GitHubClient::new(self.token.clone());
+        let client_res = GitHubClient::new(self.credentials.github.clone());
         let client = match client_res {
             Ok(c) => c,
             Err(e) => {
@@ -216,7 +216,7 @@ impl GhGrabMcp {
                 )
             }
         };
-        let client = match GitHubClient::new_for_url(self.token.clone(), &gh_url) {
+        let client = match GitHubClient::new_for_url(&self.credentials, &gh_url) {
             Ok(c) => c,
             Err(e) => {
                 return CallToolResult::structured_error(
@@ -252,7 +252,7 @@ impl GhGrabMcp {
                 )
             }
         };
-        let client = match GitHubClient::new_for_url(self.token.clone(), &gh_url) {
+        let client = match GitHubClient::new_for_url(&self.credentials, &gh_url) {
             Ok(c) => c,
             Err(e) => {
                 return CallToolResult::structured_error(
@@ -280,7 +280,7 @@ impl GhGrabMcp {
         &self,
         Parameters(params): Parameters<ListReleasesParams>,
     ) -> CallToolResult {
-        let client = match GitHubClient::new(self.token.clone()) {
+        let client = match GitHubClient::new(self.credentials.github.clone()) {
             Ok(c) => c,
             Err(e) => {
                 return CallToolResult::structured_error(
@@ -314,7 +314,7 @@ impl GhGrabMcp {
                 )
             }
         };
-        let client = match GitHubClient::new_for_url(self.token.clone(), &gh_url) {
+        let client = match GitHubClient::new_for_url(&self.credentials, &gh_url) {
             Ok(c) => c,
             Err(e) => {
                 return CallToolResult::structured_error(
@@ -339,9 +339,9 @@ impl GhGrabMcp {
     }
 }
 
-pub async fn run_mcp_server(token: Option<String>, download_path: Option<String>) -> Result<()> {
+pub async fn run_mcp_server(credentials: Credentials, download_path: Option<String>) -> Result<()> {
     let service = GhGrabMcp {
-        token,
+        credentials,
         download_path,
     };
     let server = service.serve(rmcp::transport::stdio()).await?;

@@ -410,7 +410,7 @@ pub struct GitTreeEntry {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitHubError {
-    #[error("Invalid token. Falling back to public API.")]
+    #[error("Invalid token, and the request also failed without it.")]
     InvalidToken,
     #[error("Rate limit exceeded for {0}. Consider adding a token for more limits.")]
     RateLimitReached(String),
@@ -422,6 +422,39 @@ pub enum GitHubError {
     Other(#[from] anyhow::Error),
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Credentials {
+    pub github: Option<String>,
+
+    pub explicit: Option<String>,
+
+    pub gitlab: Option<String>,
+
+    pub codeberg: Option<String>,
+}
+
+impl Credentials {
+    pub fn github_only(token: Option<String>) -> Self {
+        Credentials {
+            github: token,
+            ..Default::default()
+        }
+    }
+
+    pub fn for_platform(&self, platform: &Platform) -> Option<String> {
+        match platform {
+            Platform::GitHub => self.github.clone(),
+            Platform::GitLab(host) if host == "gitlab.com" => {
+                self.explicit.clone().or_else(|| self.gitlab.clone())
+            }
+            Platform::Gitea(host) if host == "codeberg.org" => {
+                self.explicit.clone().or_else(|| self.codeberg.clone())
+            }
+            _ => self.explicit.clone(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct GitHubClient {
     client: reqwest::Client,
@@ -431,10 +464,14 @@ pub struct GitHubClient {
 
 impl GitHubClient {
     pub fn new(token: Option<String>) -> Result<Self> {
-        Self::new_for_platform(token, Platform::GitHub)
+        Self::build(token, Platform::GitHub)
     }
 
-    pub fn new_for_platform(token: Option<String>, platform: Platform) -> Result<Self> {
+    pub fn new_for_platform(credentials: &Credentials, platform: Platform) -> Result<Self> {
+        Self::build(credentials.for_platform(&platform), platform)
+    }
+
+    fn build(token: Option<String>, platform: Platform) -> Result<Self> {
         let client = reqwest::Client::builder()
             .user_agent("ghgrab/2.1.0")
             .build()
@@ -446,8 +483,8 @@ impl GitHubClient {
         })
     }
 
-    pub fn new_for_url(token: Option<String>, gh_url: &GitHubUrl) -> Result<Self> {
-        Self::new_for_platform(token, gh_url.platform.clone())
+    pub fn new_for_url(credentials: &Credentials, gh_url: &GitHubUrl) -> Result<Self> {
+        Self::new_for_platform(credentials, gh_url.platform.clone())
     }
 
     pub fn token(&self) -> Option<&str> {
@@ -460,9 +497,28 @@ impl GitHubClient {
         url: &str,
         body: Option<serde_json::Value>,
     ) -> std::result::Result<reqwest::Response, GitHubError> {
+        match self
+            .send(method.clone(), url, body.clone(), self.token.as_deref())
+            .await
+        {
+            Err(GitHubError::InvalidToken) => self
+                .send(method, url, body, None)
+                .await
+                .map_err(|_| GitHubError::InvalidToken),
+            result => result,
+        }
+    }
+
+    async fn send(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<serde_json::Value>,
+        token: Option<&str>,
+    ) -> std::result::Result<reqwest::Response, GitHubError> {
         let mut builder = self.client.request(method, url);
 
-        if let Some(token) = &self.token {
+        if let Some(token) = token {
             builder = builder.header("Authorization", self.platform.auth_value(token));
         }
 
@@ -477,7 +533,7 @@ impl GitHubClient {
 
         match response.status().as_u16() {
             200..=299 => Ok(response),
-            401 if self.token.is_some() => Err(GitHubError::InvalidToken),
+            401 if token.is_some() => Err(GitHubError::InvalidToken),
             403 => {
                 let remaining = response
                     .headers()
@@ -487,13 +543,13 @@ impl GitHubClient {
                     .unwrap_or(1);
 
                 if remaining == 0 {
-                    let level = if self.token.is_some() {
+                    let level = if token.is_some() {
                         "authenticated user"
                     } else {
                         "unauthenticated user"
                     };
                     Err(GitHubError::RateLimitReached(level.to_string()))
-                } else if self.token.is_some() {
+                } else if token.is_some() {
                     Err(GitHubError::InvalidToken)
                 } else {
                     Err(GitHubError::ApiError(format!(
@@ -1271,10 +1327,69 @@ mod tests {
     }
 
     #[test]
+    fn github_token_is_never_sent_to_other_hosts() {
+        let credentials = Credentials::github_only(Some("ghp_secret".to_string()));
+
+        assert_eq!(
+            credentials.for_platform(&Platform::GitHub),
+            Some("ghp_secret".to_string())
+        );
+        for platform in [
+            Platform::GitLab("gitlab.com".to_string()),
+            Platform::Gitea("codeberg.org".to_string()),
+            Platform::Gitea("evil.example".to_string()),
+            Platform::GitLab("evil.example".to_string()),
+        ] {
+            assert_eq!(credentials.for_platform(&platform), None);
+        }
+    }
+
+    #[test]
+    fn forge_tokens_stay_on_their_own_host() {
+        let credentials = Credentials {
+            gitlab: Some("glpat".to_string()),
+            codeberg: Some("cb".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            credentials.for_platform(&Platform::GitLab("gitlab.com".to_string())),
+            Some("glpat".to_string())
+        );
+        assert_eq!(
+            credentials.for_platform(&Platform::Gitea("codeberg.org".to_string())),
+            Some("cb".to_string())
+        );
+        assert_eq!(credentials.for_platform(&Platform::GitHub), None);
+        assert_eq!(
+            credentials.for_platform(&Platform::GitLab("git.example.com".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn explicit_token_goes_to_any_forge_and_wins() {
+        let credentials = Credentials {
+            explicit: Some("mine".to_string()),
+            gitlab: Some("glpat".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            credentials.for_platform(&Platform::GitLab("gitlab.com".to_string())),
+            Some("mine".to_string())
+        );
+        assert_eq!(
+            credentials.for_platform(&Platform::Gitea("git.example.com".to_string())),
+            Some("mine".to_string())
+        );
+    }
+
+    #[test]
     fn test_github_error_formatting() {
         assert_eq!(
             format!("{}", GitHubError::InvalidToken),
-            "Invalid token. Falling back to public API."
+            "Invalid token, and the request also failed without it."
         );
         assert_eq!(
             format!(

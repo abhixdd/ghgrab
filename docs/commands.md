@@ -16,7 +16,7 @@ ghgrab [URL] [--cwd] [--no-folder] [--token TOKEN] [--jobs N]
 | --- | --- |
 | `--cwd` | Download files to the current working directory |
 | `--no-folder` | Download directly into the target directory without a repository subfolder |
-| `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token without storing it. `auto`/`gh` uses `gh auth token` at runtime |
+| `--token <TOKEN\|auto\|gh\|none>` | Use a one-time GitHub token without storing it. `auto`/`gh` uses `gh auth token` at runtime; `none` disables all tokens |
 | `-j, --jobs <N>` | Number of files to download in parallel, from 1 to 64 (default: 4) |
 
 Typing a keyword at the TUI home screen opens repository search mode. That search flow currently uses GitHub only.
@@ -71,7 +71,7 @@ ghgrab rel abhixdd/ghgrab --bin-path ~/bin --bin-name gg
 | `--bin-path <DIR>` | Install the selected file or binary into the provided directory (use `--extract` for archive assets). Names like `tool-linux-amd64` or `tool-x86_64.AppImage` are installed as `tool` |
 | `--bin-name <NAME>` | Set the installed file name explicitly (requires `--bin-path`; `.exe` is kept on Windows) |
 | `--cwd` | Download into the current working directory |
-| `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token for this run. `auto`/`gh` uses `gh auth token` at runtime |
+| `--token <TOKEN\|auto\|gh\|none>` | Use a one-time GitHub token for this run. `auto`/`gh` uses `gh auth token` at runtime; `none` disables all tokens |
 
 ### Selection behavior
 
@@ -145,7 +145,7 @@ Higher values speed up large downloads but increase the chance of hitting GitHub
 
 | Flag | Description |
 | --- | --- |
-| `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token. `auto`/`gh` uses `gh auth token` at runtime |
+| `--token <TOKEN\|auto\|gh\|none>` | Use a one-time GitHub token. `auto`/`gh` uses `gh auth token` at runtime; `none` disables all tokens |
 
 #### `agent download`
 
@@ -156,7 +156,7 @@ Higher values speed up large downloads but increase the chance of hitting GitHub
 | `--cwd` | Download into the current working directory |
 | `--no-folder` | Skip the repository subfolder |
 | `--out <DIR>` | Use a custom output directory |
-| `--token <TOKEN\|auto\|gh>` | Use a one-time GitHub token. `auto`/`gh` uses `gh auth token` at runtime |
+| `--token <TOKEN\|auto\|gh\|none>` | Use a one-time GitHub token. `auto`/`gh` uses `gh auth token` at runtime; `none` disables all tokens |
 | `-j, --jobs <N>` | Number of files to download in parallel, from 1 to 64 (default: 4) |
 | `--json` | Print the JSON envelope instead of human-readable output |
 
@@ -186,6 +186,7 @@ ghgrab agent tree https://github.com/rust-lang/rust --token gh
 Behavior:
 
 - Uses `gh auth token` at runtime only.
+- The discovered token is only sent to github.com, never to GitLab, Codeberg, or other forges.
 - Never prints the raw token.
 - If multiple token lines are returned, `ghgrab` reports that multiple tokens were found and uses one token.
 

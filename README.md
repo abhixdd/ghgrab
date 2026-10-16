@@ -103,7 +103,7 @@ You can also type a repository keyword on the home screen (for example `ratatui`
 |---|---|
 |`--cwd`|Forces download to the current working directory.|
 |`--no-folder`|Downloads files directly without creating a subfolder for the repo.|
-|`--token <TOKEN/AUTO/GH>`|Use a specific GitHub token for this run (doesn't save to settings). `auto`/`gh` uses `gh auth token` at runtime.|
+|`--token <TOKEN/AUTO/GH/NONE>`|Use a specific GitHub token for this run (doesn't save to settings). `auto`/`gh` uses `gh auth token` at runtime; `none` disables all tokens.|
 
 ### Release Downloads
 
@@ -194,7 +194,7 @@ ghgrab rel starship/starship --prerelease
 | `--bin-path <DIR>` | Copy the selected file or extracted binary into the provided directory. Platform suffixes are dropped, so `tool-linux-amd64` installs as `tool`. |
 | `--bin-name <NAME>` | Set the installed file name explicitly (requires `--bin-path`). |
 | `--cwd` | Download into the current working directory. |
-| `--token <TOKEN/AUTO/GH>` | Use a one-time GitHub token for this run without saving it. `auto`/`gh` uses `gh auth token` at runtime. |
+| `--token <TOKEN/AUTO/GH/NONE>` | Use a one-time GitHub token for this run without saving it. `auto`/`gh` uses `gh auth token` at runtime; `none` disables all tokens. |
 
 ### Release Examples
 
@@ -234,6 +234,7 @@ ghgrab agent tree https://github.com/rust-lang/rust --token gh
 ```
 
 - Uses `gh auth token` at runtime only.
+- The discovered token is only sent to github.com, never to GitLab, Codeberg, or other forges.
 - Never prints the raw token.
 - If multiple token lines are returned, ghgrab reports this and uses one token.
 

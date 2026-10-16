@@ -1,6 +1,7 @@
 use crate::agent::{self, AgentEnvelope};
 use crate::config::Config;
 use crate::download::DEFAULT_JOBS;
+use crate::github::Credentials;
 use crate::release::{self, FileTypePreference, ReleaseRequest, ReleaseSelectionCancelled};
 use crate::ui;
 use anyhow::Result;
@@ -10,6 +11,8 @@ use std::process::Command;
 
 const GHGRAB_GITHUB_TOKEN_ENV: &str = "GHGRAB_GITHUB_TOKEN";
 const GITHUB_TOKEN_ENV: &str = "GITHUB_TOKEN";
+const GITLAB_TOKEN_ENV: &str = "GITLAB_TOKEN";
+const CODEBERG_TOKEN_ENV: &str = "CODEBERG_TOKEN";
 
 #[derive(Parser)]
 #[command(name = "ghgrab", version, about)]
@@ -231,8 +234,8 @@ pub async fn run() -> Result<()> {
         },
         Some(Commands::Agent { action }) => match action {
             AgentCommand::Tree { url, token } => {
-                let token = resolve_github_token(token, default_config.github_token.clone())?;
-                let result = agent::fetch_tree(&url, token).await;
+                let credentials = resolve_credentials(token, default_config.github_token.clone())?;
+                let result = agent::fetch_tree(&url, &credentials).await;
                 print_agent_json("tree", result)?;
             }
             AgentCommand::Download {
@@ -247,14 +250,14 @@ pub async fn run() -> Result<()> {
                 jobs,
                 json,
             } => {
-                let token = resolve_github_token(token, default_config.github_token.clone())?;
+                let credentials = resolve_credentials(token, default_config.github_token.clone())?;
                 let out = out.or(default_config.download_path.clone());
                 let selected_paths = build_download_request(paths, repo, subtree);
                 let result = match selected_paths {
                     Ok(selected_paths) => {
                         agent::download_paths(
                             &url,
-                            token,
+                            &credentials,
                             &selected_paths,
                             out,
                             cwd,
@@ -300,7 +303,7 @@ pub async fn run() -> Result<()> {
             cwd,
             token,
         }) => {
-            let token = resolve_github_token(token, default_config.github_token.clone())?;
+            let token = resolve_credentials(token, default_config.github_token.clone())?.github;
             let result = match release::download_release(ReleaseRequest {
                 repo,
                 tag,
@@ -338,19 +341,24 @@ pub async fn run() -> Result<()> {
             if install {
                 crate::mcp_install::install_mcp_client(default_config.github_token.clone())?;
             } else {
-                let token = resolve_github_token(token, default_config.github_token.clone())?;
-                crate::mcp::run_mcp_server(token, default_config.download_path.clone()).await?;
+                // MCP URLs come from the model, not the user, so `--token` stays GitHub-only.
+                let credentials = Credentials {
+                    explicit: None,
+                    ..resolve_credentials(token, default_config.github_token.clone())?
+                };
+                crate::mcp::run_mcp_server(credentials, default_config.download_path.clone())
+                    .await?;
             }
         }
         None => {
             let url = cli.url;
             let download_path = default_config.download_path.clone();
-            let token = resolve_github_token(cli.token, default_config.github_token.clone())?;
+            let credentials = resolve_credentials(cli.token, default_config.github_token.clone())?;
             let initial_icon_mode = default_config.icon_mode.unwrap_or(ui::IconMode::Emoji);
 
             let final_icon_mode = ui::run_tui(
                 url,
-                token,
+                credentials,
                 download_path,
                 cli.cwd,
                 cli.no_folder,
@@ -380,17 +388,36 @@ fn parse_jobs(s: &str) -> Result<usize, String> {
     }
 }
 
-pub(crate) fn resolve_github_token(
+pub(crate) fn resolve_credentials(
     cli_token: Option<String>,
     config_token: Option<String>,
-) -> Result<Option<String>> {
-    if let Some(token) = normalize_token(cli_token) {
-        if is_auto_token_keyword(&token) {
-            return resolve_github_token_from_gh_cli(true);
-        }
-        return Ok(Some(token));
+) -> Result<Credentials> {
+    let cli_token = normalize_token(cli_token);
+    if cli_token.as_deref().is_some_and(is_no_token_keyword) {
+        return Ok(Credentials::default());
     }
 
+    let mut credentials = Credentials {
+        gitlab: normalize_token(std::env::var(GITLAB_TOKEN_ENV).ok()),
+        codeberg: normalize_token(std::env::var(CODEBERG_TOKEN_ENV).ok()),
+        ..Default::default()
+    };
+
+    match cli_token {
+        Some(token) if is_auto_token_keyword(&token) => {
+            credentials.github = resolve_github_token_from_gh_cli(true)?;
+        }
+        Some(token) => {
+            credentials.github = Some(token.clone());
+            credentials.explicit = Some(token);
+        }
+        None => credentials.github = resolve_github_token(config_token)?,
+    }
+
+    Ok(credentials)
+}
+
+fn resolve_github_token(config_token: Option<String>) -> Result<Option<String>> {
     if let Some(token) = resolve_github_token_from_env() {
         if is_auto_token_keyword(&token) {
             if let Some(auto_token) = resolve_github_token_from_gh_cli(false)? {
@@ -428,6 +455,10 @@ fn normalize_token(token: Option<String>) -> Option<String> {
 
 fn is_auto_token_keyword(value: &str) -> bool {
     value.eq_ignore_ascii_case("auto") || value.eq_ignore_ascii_case("gh")
+}
+
+fn is_no_token_keyword(value: &str) -> bool {
+    value.eq_ignore_ascii_case("none") || value.eq_ignore_ascii_case("off")
 }
 
 fn resolve_github_token_from_gh_cli(strict: bool) -> Result<Option<String>> {
@@ -542,7 +573,29 @@ fn print_agent_json<T: serde::Serialize>(command: &str, result: anyhow::Result<T
 #[cfg(test)]
 mod tests {
     use super::is_auto_token_keyword;
+    use super::is_no_token_keyword;
     use super::parse_gh_auth_token_stdout;
+    use super::resolve_credentials;
+    use crate::github::Credentials;
+
+    #[test]
+    fn no_token_keywords_disable_every_token() {
+        assert!(is_no_token_keyword("none"));
+        assert!(is_no_token_keyword("OFF"));
+        assert!(!is_no_token_keyword("auto"));
+
+        let credentials = resolve_credentials(Some("none".to_string()), Some("cfg".to_string()))
+            .expect("none never fails");
+        assert_eq!(credentials, Credentials::default());
+    }
+
+    #[test]
+    fn explicit_token_is_usable_on_any_forge() {
+        let credentials =
+            resolve_credentials(Some("tok".to_string()), None).expect("explicit token never fails");
+        assert_eq!(credentials.github.as_deref(), Some("tok"));
+        assert_eq!(credentials.explicit.as_deref(), Some("tok"));
+    }
 
     #[test]
     fn parse_gh_auth_token_stdout_single_token() {

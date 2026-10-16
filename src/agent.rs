@@ -1,5 +1,5 @@
 use crate::download::Downloader;
-use crate::github::{GitHubClient, GitHubError, GitHubUrl, RepoItem};
+use crate::github::{Credentials, GitHubClient, GitHubError, GitHubUrl, RepoItem};
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -79,9 +79,9 @@ impl<T> AgentEnvelope<T> {
     }
 }
 
-pub async fn fetch_tree(url: &str, token: Option<String>) -> Result<AgentTreeResponse> {
+pub async fn fetch_tree(url: &str, credentials: &Credentials) -> Result<AgentTreeResponse> {
     let gh_url = GitHubUrl::parse(url)?;
-    let client = GitHubClient::new_for_url(token.clone(), &gh_url)?;
+    let client = GitHubClient::new_for_url(credentials, &gh_url)?;
     let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
     Ok(AgentTreeResponse {
@@ -105,7 +105,7 @@ pub async fn fetch_tree(url: &str, token: Option<String>) -> Result<AgentTreeRes
 
 pub async fn download_paths(
     url: &str,
-    token: Option<String>,
+    credentials: &Credentials,
     selected_paths: &[String],
     output_path: Option<String>,
     cwd: bool,
@@ -113,7 +113,7 @@ pub async fn download_paths(
     jobs: usize,
 ) -> Result<AgentDownloadResponse> {
     let gh_url = GitHubUrl::parse(url)?;
-    let client = GitHubClient::new_for_url(token.clone(), &gh_url)?;
+    let client = GitHubClient::new_for_url(credentials, &gh_url)?;
     let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
     let items_to_download = if truncated {
@@ -130,7 +130,7 @@ pub async fn download_paths(
         base_dir.join(&repo_name)
     };
 
-    let download_client = GitHubClient::new_for_url(token, &gh_url)?;
+    let download_client = GitHubClient::new_for_url(credentials, &gh_url)?;
     let downloader = Downloader::new(download_dir.clone(), download_client, jobs)?;
     let errors = downloader
         .download_items(&items_to_download, "", |_| {})
