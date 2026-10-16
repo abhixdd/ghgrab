@@ -12,7 +12,7 @@ use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::github::{GitHubClient, GitHubError, GitHubUrl, RepoItem, SearchItem};
+use crate::github::{Credentials, GitHubClient, GitHubError, GitHubUrl, RepoItem, SearchItem};
 use crate::ui::components::syntax_highlighting::highlight_content;
 
 pub mod components;
@@ -112,7 +112,7 @@ pub struct AppState {
     pub frame_count: u64,
     pub toast: Option<Toast>,
     pub icon_mode: IconMode,
-    pub github_token: Option<String>,
+    pub credentials: Credentials,
     pub terminal_height: u16,
     pub download_path: Option<String>,
     pub full_tree: Option<Vec<RepoItem>>,
@@ -159,7 +159,7 @@ impl AppState {
             frame_count: 0,
             toast: None,
             icon_mode: IconMode::Emoji,
-            github_token: None,
+            credentials: Credentials::default(),
             terminal_height: 24,
             download_path: None,
             full_tree: None,
@@ -434,7 +434,7 @@ impl AppState {
 
 pub async fn run_tui(
     initial_url: Option<String>,
-    token: Option<String>,
+    credentials: Credentials,
     download_path: Option<String>,
     cwd: bool,
     no_folder: bool,
@@ -449,9 +449,9 @@ pub async fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
 
-    let client = GitHubClient::new(token.clone())?;
+    let client = GitHubClient::new(credentials.github.clone())?;
     let mut state_init = AppState::new();
-    state_init.github_token = token;
+    state_init.credentials = credentials;
     state_init.download_path = download_path;
     state_init.cwd = cwd;
     state_init.no_folder = no_folder;
@@ -1221,12 +1221,12 @@ async fn handle_input(
 async fn load_repo(state: Arc<Mutex<AppState>>, _client: GitHubClient, mut gh_url: GitHubUrl) {
     let state_c = state.clone();
 
-    let token = {
+    let credentials = {
         let s = state_c.lock().await;
-        s.github_token.clone()
+        s.credentials.clone()
     };
 
-    let mut current_client = match GitHubClient::new_for_url(token, &gh_url) {
+    let current_client = match GitHubClient::new_for_url(&credentials, &gh_url) {
         Ok(c) => c,
         Err(e) => {
             let mut s = state_c.lock().await;
@@ -1243,20 +1243,6 @@ async fn load_repo(state: Arc<Mutex<AppState>>, _client: GitHubClient, mut gh_ur
     }
 
     let mut tree_result = current_client.fetch_recursive_tree(&gh_url).await;
-
-    if let Err(GitHubError::InvalidToken) = &tree_result {
-        {
-            let mut s = state_c.lock().await;
-            s.show_toast(
-                "Invalid token! Falling back to public API.".to_string(),
-                ToastType::Warning,
-            );
-        }
-        if let Ok(no_auth_client) = GitHubClient::new_for_platform(None, gh_url.platform.clone()) {
-            current_client = no_auth_client;
-            tree_result = current_client.fetch_recursive_tree(&gh_url).await;
-        }
-    }
 
     if let Err(GitHubError::NotFound(_)) = &tree_result {
         for candidate in gh_url.ambiguous_ref_candidates() {
@@ -1473,7 +1459,7 @@ async fn perform_download(
                 final_items,
                 format!("{}/{}", url.owner, url.repo),
                 url.repo.clone(),
-                s.github_token.clone(),
+                s.credentials.clone(),
                 s.download_path.clone(),
                 s.cwd,
                 s.no_folder,
@@ -1499,7 +1485,7 @@ async fn perform_download(
             .map(|u| u.platform.clone())
             .unwrap_or(crate::github::Platform::GitHub)
     };
-    let download_client = GitHubClient::new_for_platform(token, platform)?;
+    let download_client = GitHubClient::new_for_platform(&token, platform)?;
     let downloader = Downloader::new(download_dir.clone(), download_client, jobs)?;
     let state_c = state.clone();
 
