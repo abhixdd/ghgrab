@@ -33,6 +33,8 @@ tar = "0.4"
 flate2 = "1.0"
 xz2 = "0.1"
 futures = "0.3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+base64 = "0.22"
 
 [dev-dependencies]
 rusty-hook = "0.11.2"

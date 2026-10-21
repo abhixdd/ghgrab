@@ -58,7 +58,7 @@ Release downloads are currently GitHub-only.
 | `Space` | Toggle selection |
 | `d` | Download selected items |
 | `D` | Download selected items to a chosen folder |
-| `p` / `P` | Preview the current file |
+| `p` / `P` | Preview the current file (text or image) |
 | `a` | Select all items |
 | `u` | Clear all selections |
 | `g` / `Home` | Jump to top |

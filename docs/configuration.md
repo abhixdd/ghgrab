@@ -68,6 +68,32 @@ You can control where files are written by using:
 
 Use `--no-folder` when you want downloaded paths placed directly in the target directory instead of a repository-named folder.
 
+## Image previews
+
+Pressing `p` on a PNG, JPEG, GIF (first frame only), BMP, or WebP file renders the image inside the preview popup. Files larger than 10 MB are not previewed, and video files still cannot be previewed.
+
+`ghgrab` picks a renderer from environment variables, without querying the terminal:
+
+- Kitty graphics protocol: kitty, Ghostty.
+- iTerm2 inline images: iTerm2, WezTerm.
+- Colored half-block characters: every other terminal, and always inside tmux or screen. A truecolor terminal gives the best results.
+
+Override the choice with `GHGRAB_IMAGE_PROTOCOL`:
+
+| Value | Effect |
+| --- | --- |
+| `auto` | Detect the terminal as described above (default) |
+| `kitty` | Force the Kitty graphics protocol |
+| `iterm2` | Force iTerm2 inline images |
+| `halfblocks` | Force half-block rendering |
+| `none` | Disable image previews |
+
+Values are case-insensitive; unknown values fall back to `auto`.
+
+```bash
+GHGRAB_IMAGE_PROTOCOL=halfblocks ghgrab
+```
+
 ## When a token helps
 
 Token support is especially useful when:

@@ -1,14 +1,20 @@
+use crate::ui::components::image_preview::{
+    self, is_previewable_image, ImageProtocol, PreviewImage, MAX_IMAGE_BYTES,
+};
 use crate::ui::components::toast::{Toast, ToastType};
 use anyhow::{Context, Result};
 use crossterm::{
+    cursor::MoveTo,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
+    execute, queue,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use ratatui::layout::Rect;
 use ratatui::text::Text;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::collections::{HashMap, HashSet};
-use std::io;
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -18,9 +24,19 @@ use crate::ui::components::syntax_highlighting::highlight_content;
 pub mod components;
 pub mod theme;
 
+static KITTY_IMAGES: AtomicBool = AtomicBool::new(false);
+
+fn clear_kitty_images(out: &mut impl Write) -> io::Result<()> {
+    out.write_all(image_preview::kitty_clear_sequence().as_bytes())?;
+    out.flush()
+}
+
 fn install_panic_hook() {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
+        if KITTY_IMAGES.load(Ordering::Relaxed) {
+            let _ = clear_kitty_images(&mut io::stdout());
+        }
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         original_hook(panic_info);
@@ -127,7 +143,11 @@ pub struct AppState {
     pub preview_text: Option<Text<'static>>,
     pub preview_path: String,
     pub preview_loading: bool,
-    pub preview_is_image: bool,
+    pub preview_unsupported: bool,
+    pub preview_image: Option<Arc<PreviewImage>>,
+    pub image_protocol: ImageProtocol,
+    pub cell_ratio: f32,
+    pub image_placement: Option<(Rect, bool)>,
     pub search_results: Vec<SearchItem>,
     pub search_cursor: usize,
     pub search_query_version: u64,
@@ -174,7 +194,11 @@ impl AppState {
             preview_text: None,
             preview_path: String::new(),
             preview_loading: false,
-            preview_is_image: false,
+            preview_unsupported: false,
+            preview_image: None,
+            image_protocol: ImageProtocol::Halfblocks,
+            cell_ratio: 2.0,
+            image_placement: None,
             search_results: Vec::new(),
             search_cursor: 0,
             search_query_version: 0,
@@ -195,6 +219,10 @@ impl AppState {
         self.dest_input.clear();
         self.dest_cursor = 0;
         self.mode = AppMode::Browse;
+    }
+
+    pub fn is_current_preview(&self, path: &str) -> bool {
+        self.mode == AppMode::Preview && self.preview_path == path
     }
 
     pub fn show_toast(&mut self, message: String, type_: ToastType) {
@@ -457,6 +485,12 @@ pub async fn run_tui(
     state_init.no_folder = no_folder;
     state_init.jobs = jobs;
     state_init.icon_mode = icon_mode;
+    state_init.image_protocol = ImageProtocol::detect();
+    state_init.cell_ratio = image_preview::cell_ratio();
+    KITTY_IMAGES.store(
+        state_init.image_protocol == ImageProtocol::Kitty,
+        Ordering::Relaxed,
+    );
 
     let has_initial_url = initial_url.is_some();
 
@@ -494,6 +528,9 @@ pub async fn run_tui(
     let state_clone = state.clone();
     let result = event_loop(&mut terminal, state, client).await;
 
+    if KITTY_IMAGES.load(Ordering::Relaxed) {
+        let _ = clear_kitty_images(terminal.backend_mut());
+    }
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -509,6 +546,7 @@ async fn event_loop(
     state: Arc<Mutex<AppState>>,
     client: GitHubClient,
 ) -> Result<()> {
+    let mut last_size: Option<Rect> = None;
     loop {
         {
             let mut state_lock = state.lock().await;
@@ -521,8 +559,13 @@ async fn event_loop(
                 }
             }
 
+            let toast_visible = state_lock.toast.is_some();
+            let mut frame_size = Rect::default();
+            let mut image_rect: Option<Rect> = None;
+
             terminal.draw(|f| {
                 let size = f.size();
+                frame_size = size;
                 state_lock.terminal_height = size.height;
                 f.render_widget(
                     ratatui::widgets::Block::default()
@@ -598,9 +641,12 @@ async fn event_loop(
                             text: s.preview_text.clone(),
                             path: &s.preview_path,
                             loading: s.preview_loading,
-                            is_image: s.preview_is_image,
+                            unsupported: s.preview_unsupported,
+                            image: s.preview_image.as_deref(),
+                            protocol: s.image_protocol,
+                            cell_ratio: s.cell_ratio,
                         };
-                        components::preview::render(f, size, preview_state);
+                        image_rect = components::preview::render(f, size, preview_state);
                     }
                 }
 
@@ -608,6 +654,21 @@ async fn event_loop(
                     components::toast::render(f, size, toast);
                 }
             })?;
+
+            let resized = last_size.is_some_and(|prev| prev != frame_size);
+            last_size = Some(frame_size);
+
+            if state_lock.image_protocol.is_graphics()
+                && sync_graphics_image(
+                    terminal,
+                    &mut state_lock,
+                    image_rect,
+                    toast_visible,
+                    resized,
+                )?
+            {
+                continue;
+            }
         }
 
         if event::poll(std::time::Duration::from_millis(100))? {
@@ -622,6 +683,57 @@ async fn event_loop(
     }
 
     Ok(())
+}
+
+/// Draws or removes the graphics-protocol image after a frame. Returns true when the
+/// screen was cleared and the frame has to be redrawn right away.
+fn sync_graphics_image(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    s: &mut AppState,
+    rect: Option<Rect>,
+    toast_visible: bool,
+    resized: bool,
+) -> io::Result<bool> {
+    let protocol = s.image_protocol;
+
+    let Some((rect, image)) = rect.zip(s.preview_image.clone()) else {
+        if s.image_placement.take().is_some() {
+            if protocol == ImageProtocol::Kitty {
+                clear_kitty_images(terminal.backend_mut())?;
+            }
+            terminal.clear()?;
+            return Ok(true);
+        }
+        return Ok(false);
+    };
+
+    if let Some((prev_rect, prev_toast)) = s.image_placement {
+        // iTerm2 images cover text, so a toast that just appeared is left on top
+        let toast_appeared = protocol == ImageProtocol::Iterm2 && toast_visible && !prev_toast;
+        if prev_rect == rect && !resized && (prev_toast == toast_visible || toast_appeared) {
+            s.image_placement = Some((rect, toast_visible));
+            return Ok(false);
+        }
+        if protocol == ImageProtocol::Iterm2 && prev_rect != rect && !resized {
+            s.image_placement = None;
+            terminal.clear()?;
+            return Ok(true);
+        }
+    }
+
+    let backend = terminal.backend_mut();
+    let sequence = if protocol == ImageProtocol::Kitty {
+        backend.write_all(image_preview::kitty_clear_sequence().as_bytes())?;
+        image.kitty_sequence(rect.width, rect.height)
+    } else {
+        image.iterm2_sequence(rect.width, rect.height)
+    };
+    queue!(backend, MoveTo(rect.x, rect.y))?;
+    backend.write_all(sequence.as_bytes())?;
+    backend.flush()?;
+
+    s.image_placement = Some((rect, toast_visible));
+    Ok(false)
 }
 
 async fn handle_input(
@@ -975,41 +1087,37 @@ async fn handle_input(
                                 s.preview_path = item.path.clone();
                                 s.preview_content = String::new();
                                 s.preview_text = None;
-                                s.preview_is_image = false;
-                                s.preview_loading = true;
+                                s.preview_image = None;
+                                s.preview_unsupported = false;
+                                s.preview_loading = false;
 
-                                let url = download_url.clone();
-                                let state_c = state.clone();
-                                let client_c = client.clone();
-                                let item_path = item.path.clone();
+                                let is_image = is_previewable_image(&item.path);
+                                let image_size = item.actual_size().unwrap_or(0);
 
-                                tokio::spawn(async move {
-                                    if is_media_file(&item_path) || is_video_file(&item_path) {
-                                        let mut s = state_c.lock().await;
-                                        s.preview_is_image = true;
-                                        s.preview_loading = false;
-                                        s.preview_text = None;
-                                    } else {
-                                        match client_c.fetch_partial_content(&url, 16 * 1024).await
-                                        {
-                                            Ok(content) => {
-                                                let highlighted =
-                                                    highlight_content(&content, &item_path);
-                                                let mut s = state_c.lock().await;
-                                                s.preview_content = content;
-                                                s.preview_text = Some(highlighted);
-                                                s.preview_loading = false;
-                                            }
-                                            Err(e) => {
-                                                let mut s = state_c.lock().await;
-                                                s.preview_content =
-                                                    format!("Error fetching preview: {}", e);
-                                                s.preview_text = None;
-                                                s.preview_loading = false;
-                                            }
+                                if is_video_file(&item.path)
+                                    || (is_image && s.image_protocol == ImageProtocol::Disabled)
+                                {
+                                    s.preview_unsupported = true;
+                                } else if is_image && image_size > MAX_IMAGE_BYTES {
+                                    s.preview_content = image_too_large_message(image_size);
+                                } else {
+                                    s.preview_loading = true;
+
+                                    let url = download_url.clone();
+                                    let state_c = state.clone();
+                                    let client_c = client.clone();
+                                    let item_path = item.path.clone();
+
+                                    tokio::spawn(async move {
+                                        if is_image {
+                                            load_image_preview(state_c, client_c, url, item_path)
+                                                .await;
+                                        } else {
+                                            load_text_preview(state_c, client_c, url, item_path)
+                                                .await;
                                         }
-                                    }
-                                });
+                                    });
+                                }
                             }
                         }
                     }
@@ -1114,6 +1222,7 @@ async fn handle_input(
             | KeyCode::Left
             | KeyCode::Char('h') => {
                 s.mode = AppMode::Browse;
+                s.preview_image = None;
             }
             _ => {}
         },
@@ -1583,14 +1692,71 @@ fn map_tree_to_items(tree: crate::github::GitTreeResponse, gh_url: &GitHubUrl) -
         .collect()
 }
 
-fn is_media_file(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    lower.ends_with(".png")
-        || lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".gif")
-        || lower.ends_with(".bmp")
-        || lower.ends_with(".webp")
+async fn load_text_preview(
+    state: Arc<Mutex<AppState>>,
+    client: GitHubClient,
+    url: String,
+    path: String,
+) {
+    let result = client.fetch_partial_content(&url, 16 * 1024).await;
+    let highlighted = result
+        .as_ref()
+        .ok()
+        .map(|content| highlight_content(content, &path));
+
+    let mut s = state.lock().await;
+    if !s.is_current_preview(&path) {
+        return;
+    }
+    match result {
+        Ok(content) => {
+            s.preview_content = content;
+            s.preview_text = highlighted;
+        }
+        Err(e) => {
+            s.preview_content = format!("Error fetching preview: {}", e);
+            s.preview_text = None;
+        }
+    }
+    s.preview_loading = false;
+}
+
+async fn load_image_preview(
+    state: Arc<Mutex<AppState>>,
+    client: GitHubClient,
+    url: String,
+    path: String,
+) {
+    let load_error = |e: anyhow::Error| format!("Error loading image preview: {:#}", e);
+    let result = match client.fetch_bytes(&url).await {
+        Ok(bytes) if bytes.len() as u64 > MAX_IMAGE_BYTES => {
+            Err(image_too_large_message(bytes.len() as u64))
+        }
+        Ok(bytes) => tokio::task::spawn_blocking(move || PreviewImage::decode(&bytes))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|decoded| decoded)
+            .map_err(load_error),
+        Err(e) => Err(load_error(e)),
+    };
+
+    let mut s = state.lock().await;
+    if !s.is_current_preview(&path) {
+        return;
+    }
+    match result {
+        Ok(image) => s.preview_image = Some(Arc::new(image)),
+        Err(message) => s.preview_content = message,
+    }
+    s.preview_loading = false;
+}
+
+fn image_too_large_message(size: u64) -> String {
+    format!(
+        "Image is too large to preview ({:.1} MB, limit is {} MB).\nDownload it to view it locally.",
+        size as f64 / (1024.0 * 1024.0),
+        MAX_IMAGE_BYTES / (1024 * 1024)
+    )
 }
 
 fn is_video_file(path: &str) -> bool {

@@ -1,5 +1,6 @@
 pub mod browser;
 pub mod dest_prompt;
+pub mod image_preview;
 pub mod input;
 pub mod preview;
 pub mod repo_search;
