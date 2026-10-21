@@ -418,6 +418,8 @@ pub enum GitHubError {
     NotFound(String),
     #[error("API Error: {0}")]
     ApiError(String),
+    #[error("Response is larger than {0} bytes")]
+    TooLarge(u64),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -887,6 +889,27 @@ impl GitHubClient {
             .await
             .context("Failed to read binary content")?;
         Ok(bytes.to_vec())
+    }
+
+    pub async fn fetch_bytes_limited(&self, url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+        let mut response = self.request(reqwest::Method::GET, url, None).await?;
+        if response.content_length().is_some_and(|len| len > max_bytes) {
+            return Err(GitHubError::TooLarge(max_bytes).into());
+        }
+
+        // Content-Length is often missing (e.g. GitLab raw files), so enforce the cap while reading
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .context("Failed to read binary content")?
+        {
+            if (bytes.len() + chunk.len()) as u64 > max_bytes {
+                return Err(GitHubError::TooLarge(max_bytes).into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }
 
     pub async fn fetch_partial_content(&self, url: &str, max_bytes: u64) -> Result<String> {

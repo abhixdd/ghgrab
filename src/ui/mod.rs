@@ -1099,7 +1099,7 @@ async fn handle_input(
                                 {
                                     s.preview_unsupported = true;
                                 } else if is_image && image_size > MAX_IMAGE_BYTES {
-                                    s.preview_content = image_too_large_message(image_size);
+                                    s.preview_content = image_too_large_message(Some(image_size));
                                 } else {
                                     s.preview_loading = true;
 
@@ -1728,15 +1728,15 @@ async fn load_image_preview(
     path: String,
 ) {
     let load_error = |e: anyhow::Error| format!("Error loading image preview: {:#}", e);
-    let result = match client.fetch_bytes(&url).await {
-        Ok(bytes) if bytes.len() as u64 > MAX_IMAGE_BYTES => {
-            Err(image_too_large_message(bytes.len() as u64))
-        }
+    let result = match client.fetch_bytes_limited(&url, MAX_IMAGE_BYTES).await {
         Ok(bytes) => tokio::task::spawn_blocking(move || PreviewImage::decode(&bytes))
             .await
             .map_err(anyhow::Error::from)
             .and_then(|decoded| decoded)
             .map_err(load_error),
+        Err(e) if matches!(e.downcast_ref(), Some(GitHubError::TooLarge(_))) => {
+            Err(image_too_large_message(None))
+        }
         Err(e) => Err(load_error(e)),
     };
 
@@ -1751,11 +1751,19 @@ async fn load_image_preview(
     s.preview_loading = false;
 }
 
-fn image_too_large_message(size: u64) -> String {
+fn image_too_large_message(size: Option<u64>) -> String {
+    let limit = MAX_IMAGE_BYTES / (1024 * 1024);
+    let detail = match size {
+        Some(size) => format!(
+            "{:.1} MB, limit is {} MB",
+            size as f64 / (1024.0 * 1024.0),
+            limit
+        ),
+        None => format!("over the {} MB limit", limit),
+    };
     format!(
-        "Image is too large to preview ({:.1} MB, limit is {} MB).\nDownload it to view it locally.",
-        size as f64 / (1024.0 * 1024.0),
-        MAX_IMAGE_BYTES / (1024 * 1024)
+        "Image is too large to preview ({}).\nDownload it to view it locally.",
+        detail
     )
 }
 
