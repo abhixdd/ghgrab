@@ -16,7 +16,7 @@ impl Platform {
             "gitlab.com" => Platform::GitLab("gitlab.com".to_string()),
             "codeberg.org" => Platform::Gitea("codeberg.org".to_string()),
             h => {
-                if segments.len() >= 3 && segments[2] == "-" {
+                if segments.contains(&"-") {
                     Platform::GitLab(h.to_string())
                 } else {
                     Platform::Gitea(h.to_string())
@@ -77,12 +77,9 @@ impl GitHubUrl {
             return Err(anyhow!("URL must contain owner and repository"));
         }
 
-        let owner = path_segments[0].to_string();
-        let repo = path_segments[1].trim_end_matches(".git").to_string();
-
         let platform = Platform::detect(host, &path_segments);
 
-        let (branch, path) = Self::parse_branch_and_path(&platform, &path_segments);
+        let (owner, repo, branch, path) = Self::parse_project_and_ref(&platform, &path_segments);
 
         Ok(GitHubUrl {
             owner,
@@ -93,49 +90,56 @@ impl GitHubUrl {
         })
     }
 
-    fn parse_branch_and_path(platform: &Platform, segments: &[&str]) -> (String, String) {
+    fn parse_project_and_ref(
+        platform: &Platform,
+        segments: &[&str],
+    ) -> (String, String, String, String) {
+        let strip_git = |s: &str| s.trim_end_matches(".git").to_string();
+        let branch_and_path =
+            |after: &[&str]| -> (String, String) { (after[0].to_string(), after[1..].join("/")) };
+
         match platform {
             Platform::GitHub => {
-                if segments.len() >= 4 && (segments[2] == "tree" || segments[2] == "blob") {
-                    let branch = segments[3].to_string();
-                    let path = if segments.len() > 4 {
-                        segments[4..].join("/")
-                    } else {
-                        String::new()
-                    };
-                    (branch, path)
-                } else {
-                    ("main".to_string(), String::new())
-                }
+                let owner = segments[0].to_string();
+                let repo = strip_git(segments[1]);
+                let (branch, path) = match &segments[2..] {
+                    [kind, rest @ ..]
+                        if (*kind == "tree" || *kind == "blob") && !rest.is_empty() =>
+                    {
+                        branch_and_path(rest)
+                    }
+                    _ => ("main".to_string(), String::new()),
+                };
+                (owner, repo, branch, path)
             }
             Platform::Gitea(_) => {
-                if segments.len() >= 5 && segments[2] == "src" {
-                    let branch = segments[4].to_string();
-                    let path = if segments.len() > 5 {
-                        segments[5..].join("/")
-                    } else {
-                        String::new()
-                    };
-                    (branch, path)
-                } else {
-                    ("main".to_string(), String::new())
-                }
+                let owner = segments[0].to_string();
+                let repo = strip_git(segments[1]);
+                let (branch, path) = match &segments[2..] {
+                    ["src", _, rest @ ..] if !rest.is_empty() => branch_and_path(rest),
+                    _ => ("main".to_string(), String::new()),
+                };
+                (owner, repo, branch, path)
             }
             Platform::GitLab(_) => {
-                if segments.len() >= 5
-                    && segments[2] == "-"
-                    && (segments[3] == "tree" || segments[3] == "blob")
-                {
-                    let branch = segments[4].to_string();
-                    let path = if segments.len() > 5 {
-                        segments[5..].join("/")
-                    } else {
-                        String::new()
-                    };
-                    (branch, path)
-                } else {
-                    ("main".to_string(), String::new())
-                }
+                let project_end = segments
+                    .iter()
+                    .position(|s| *s == "-")
+                    .unwrap_or(segments.len())
+                    .max(2);
+                let repo_idx = project_end - 1;
+                let owner = segments[..repo_idx].join("/");
+                let repo = strip_git(segments[repo_idx]);
+
+                let (branch, path) = match segments.get(project_end + 1..) {
+                    Some([kind, rest @ ..])
+                        if (*kind == "tree" || *kind == "blob") && !rest.is_empty() =>
+                    {
+                        branch_and_path(rest)
+                    }
+                    _ => ("main".to_string(), String::new()),
+                };
+                (owner, repo, branch, path)
             }
         }
     }
@@ -1102,6 +1106,46 @@ mod tests {
         assert_eq!(parsed.branch, "develop");
         assert_eq!(parsed.path, "src/core");
         assert_eq!(parsed.platform, Platform::GitLab("gitlab.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_gitlab_subgroup_root_url() {
+        let url = "https://gitlab.com/gitlab-org/security-products/analyzers/common";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.owner, "gitlab-org/security-products/analyzers");
+        assert_eq!(parsed.repo, "common");
+        assert_eq!(parsed.branch, "main");
+        assert_eq!(parsed.path, "");
+        assert_eq!(parsed.platform, Platform::GitLab("gitlab.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_gitlab_subgroup_tree_url() {
+        let url =
+            "https://gitlab.com/gitlab-org/security-products/analyzers/common/-/tree/master/plugin";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.owner, "gitlab-org/security-products/analyzers");
+        assert_eq!(parsed.repo, "common");
+        assert_eq!(parsed.branch, "master");
+        assert_eq!(parsed.path, "plugin");
+    }
+
+    #[test]
+    fn test_parse_gitlab_subgroup_url_with_git_suffix() {
+        let url = "https://gitlab.com/gitlab-org/security-products/analyzers/common.git";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.owner, "gitlab-org/security-products/analyzers");
+        assert_eq!(parsed.repo, "common");
+    }
+
+    #[test]
+    fn test_gitlab_subgroup_api_url_encodes_full_project_path() {
+        let parsed =
+            GitHubUrl::parse("https://gitlab.com/gitlab-org/security-products/analyzers/common")
+                .unwrap();
+        assert!(parsed
+            .api_url()
+            .contains("/api/v4/projects/gitlab-org%2Fsecurity-products%2Fanalyzers%2Fcommon/"));
     }
 
     #[test]
