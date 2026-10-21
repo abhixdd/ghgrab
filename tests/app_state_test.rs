@@ -521,3 +521,22 @@ fn test_cancel_repo_search_invalidates_pending_results() {
     assert_eq!(state.search_query_version, 7);
     assert!(state.search_results.is_empty());
 }
+
+#[test]
+fn test_image_preview_defaults() {
+    use ghgrab::ui::components::image_preview::ImageProtocol;
+    use ghgrab::ui::AppMode;
+
+    let mut state = AppState::new();
+    assert!(state.preview_image.is_none());
+    assert_eq!(state.image_protocol, ImageProtocol::Halfblocks);
+    assert!(state.image_placement.is_none());
+    assert!(!state.preview_unsupported);
+
+    state.preview_path = "assets/logo.png".to_string();
+    assert!(!state.is_current_preview("assets/logo.png"));
+
+    state.mode = AppMode::Preview;
+    assert!(state.is_current_preview("assets/logo.png"));
+    assert!(!state.is_current_preview("assets/other.png"));
+}

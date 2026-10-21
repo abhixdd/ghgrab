@@ -15,7 +15,7 @@
 - **Works where you are**: Installs quickly via NPM, Cargo, or PIP.
 - **Find things fast**: Quickly search and navigate through any repo's folders with fuzzy search.
 - **Repo discovery built in**: Type a repo keyword from home to search GitHub repos, filter them, then open instantly.
-- **File Preview**: Preview source code and text files directly in the TUI.
+- **File Preview**: Preview source code, text files, and images directly in the TUI.
 - **Handles the big stuff**: Built-in support for GitHub LFS (Large File Storage).
 - **Batch mode**: Select a bunch of files and folders to download them all at once.
 - **Release downloads**: Grab GitHub release artifacts with OS/architecture-aware selection.
@@ -224,6 +224,18 @@ ghgrab release sharkdp/bat
 - `GHGRAB_GITHUB_TOKEN`
 - `GITHUB_TOKEN`
 
+`GHGRAB_IMAGE_PROTOCOL` controls how image previews (PNG, JPEG, GIF first frame, BMP, WebP; up to 10 MB) are drawn:
+
+| Value        | Behavior                                                                                      |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| `auto`       | Default. Kitty protocol on kitty/Ghostty, iTerm2 protocol on iTerm2/WezTerm, else half-blocks |
+| `kitty`      | Force the Kitty graphics protocol                                                             |
+| `iterm2`     | Force iTerm2 inline images                                                                    |
+| `halfblocks` | Colored half-block characters; works anywhere, best in truecolor terminals                    |
+| `none`       | Disable image previews                                                                        |
+
+Inside tmux or screen, `auto` uses half-blocks because graphics passthrough is unreliable; set the variable explicitly to override. Videos still can't be previewed.
+
 ### Runtime token auto mode
 
 If you already use GitHub CLI, you can avoid manual token copy/paste:
@@ -323,7 +335,7 @@ We've kept it pretty standard, but here's a quick cheat sheet:
 | `q` / `Q`                         | **Quit** (from file list)                                                |
 | `Ctrl+q`                          | **Force Quit** (anywhere)                                                |
 | `Space`                           | Toggle selection for the current item                                    |
-| `p` / `P`                         | **Preview** current file                                                 |
+| `p` / `P`                         | **Preview** current file (text or image)                                 |
 | `a`                               | Select All items                                                         |
 | `u`                               | Unselect all items                                                       |
 | `d`                               | Download selected items                                                  |

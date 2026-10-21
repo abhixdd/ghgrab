@@ -7,7 +7,7 @@
 - Browse repositories in a full-screen terminal UI.
 - Open a repository directly from a GitHub, GitLab, Codeberg, Gitea, or Forgejo URL.
 - Search for repositories from the home screen.
-- Preview text and source files before downloading.
+- Preview text, source files, and images before downloading.
 - Select multiple files or folders and download them in one run.
 - Download GitHub release assets with OS and architecture-aware matching.
 - Expose machine-readable commands for scripts and agent workflows.
