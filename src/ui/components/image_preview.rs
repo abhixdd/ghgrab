@@ -1,6 +1,6 @@
 use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD, Engine};
-use image::{imageops::FilterType, ImageFormat, RgbaImage};
+use image::{imageops::FilterType, ImageFormat, ImageReader, RgbaImage};
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span, Text},
@@ -12,6 +12,9 @@ use std::sync::Mutex;
 pub const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 
 const MAX_STORED_SIDE: u32 = 1024;
+
+const MAX_DECODE_SIDE: u32 = 16384;
+const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
 const KITTY_CHUNK: usize = 4096;
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
@@ -104,7 +107,17 @@ pub struct PreviewImage {
 
 impl PreviewImage {
     pub fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
-        let image = image::load_from_memory(bytes).context("Failed to decode image")?;
+        let mut reader = ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .context("Failed to detect image format")?;
+
+        let mut limits = image::Limits::no_limits();
+        limits.max_image_width = Some(MAX_DECODE_SIDE);
+        limits.max_image_height = Some(MAX_DECODE_SIDE);
+        limits.max_alloc = Some(MAX_DECODE_ALLOC);
+        reader.limits(limits);
+
+        let image = reader.decode().context("Failed to decode image")?;
         let (width, height) = (image.width(), image.height());
 
         let image = if width.max(height) > MAX_STORED_SIDE {
