@@ -195,6 +195,7 @@ pub fn classify_error(error: &anyhow::Error) -> &'static str {
             GitHubError::RateLimitReached(_) => "rate_limit",
             GitHubError::NotFound(_) => "not_found",
             GitHubError::ApiError(_) => "api_error",
+            GitHubError::TooLarge(_) => "too_large",
             GitHubError::Other(_) => "internal_error",
         };
     }
