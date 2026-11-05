@@ -498,7 +498,7 @@ fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
             let mut file = archive
                 .by_index(index)
                 .context("Failed to read zip entry")?;
-            let out_path = destination.join(file.mangled_name());
+            let out_path = destination.join(file.mangled_name()?);
             if file.is_dir() {
                 fs::create_dir_all(&out_path)?;
                 continue;
@@ -757,6 +757,36 @@ mod tests {
         ));
         assert!(should_extract_asset(true, "tool-v1.0.0-linux-amd64.tar.gz"));
         assert!(!should_extract_asset(true, "tool-v1.0.0-linux-amd64"));
+    }
+
+    #[test]
+    fn extracts_zip_entries_and_contains_traversal() -> Result<()> {
+        let root = temp_dir("zip-extract");
+        fs::create_dir_all(&root)?;
+        let archive_path = root.join("assets.zip");
+        let dest = root.join("out");
+        fs::create_dir_all(&dest)?;
+
+        {
+            let file = fs::File::create(&archive_path)?;
+            let mut writer = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.add_directory("nested", options)?;
+            writer.start_file("nested/tool.bin", options)?;
+            writer.write_all(b"payload")?;
+            writer.start_file("../escaped.txt", options)?;
+            writer.write_all(b"trapped")?;
+            writer.finish()?;
+        }
+
+        extract_archive(&archive_path, &dest)?;
+
+        assert_eq!(fs::read(dest.join("nested").join("tool.bin"))?, b"payload");
+        assert_eq!(fs::read(dest.join("escaped.txt"))?, b"trapped");
+        assert!(!root.join("escaped.txt").exists());
+
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
     }
 
     #[test]
