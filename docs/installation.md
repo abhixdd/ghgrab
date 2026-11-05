@@ -36,7 +36,7 @@ Run a tagged release:
 nix run "github:abhixdd/ghgrab/<tag>"
 ```
 
-Use full semantic version tags for releases, for example `v2.3.0`.
+Use full semantic version tags for releases, for example `v2.3.1`.
 
 ## Arch Linux
 

@@ -479,7 +479,7 @@ impl GitHubClient {
 
     fn build(token: Option<String>, platform: Platform) -> Result<Self> {
         let client = reqwest::Client::builder()
-            .user_agent("ghgrab/2.3.0")
+            .user_agent(concat!("ghgrab/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("Failed to create HTTP client")?;
         Ok(GitHubClient {
