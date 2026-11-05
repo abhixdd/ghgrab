@@ -9,8 +9,12 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -69,6 +73,11 @@ jobs:
           src="target/${{ matrix.target }}/release/${{ matrix.artifact }}"
           dst="${{ matrix.release_name }}"
           cp "$src" "$dst"
+
+      - name: Smoke test binary
+        if: matrix.platform == 'linux' || matrix.platform == 'win32'
+        shell: bash
+        run: ./${{ matrix.release_name }} --version
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
