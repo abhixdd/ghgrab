@@ -83,7 +83,7 @@ impl<T> AgentEnvelope<T> {
 pub async fn fetch_tree(url: &str, credentials: &Credentials) -> Result<AgentTreeResponse> {
     let gh_url = GitHubUrl::parse(url)?;
     let client = GitHubClient::new_for_url(credentials, &gh_url)?;
-    let (gh_url, entries, truncated) = load_tree(&client, gh_url, true).await?;
+    let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
     Ok(AgentTreeResponse {
         owner: gh_url.owner,
@@ -194,9 +194,7 @@ pub async fn download_paths(
         });
     }
 
-    // Skip LFS probing for the whole tree: only the files we actually
-    // download need their LFS pointers resolved.
-    let (gh_url, entries, truncated) = load_tree(&client, gh_url, false).await?;
+    let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
     let mut items_to_download = if truncated {
         resolve_requested_items_with_fallback(&client, &gh_url, &entries, selected_paths).await?
@@ -301,7 +299,6 @@ pub fn classify_error(error: &anyhow::Error) -> &'static str {
 async fn load_tree(
     client: &GitHubClient,
     mut gh_url: GitHubUrl,
-    resolve_lfs: bool,
 ) -> Result<(GitHubUrl, Vec<RepoItem>, bool)> {
     let mut tree_result = client.fetch_recursive_tree(&gh_url).await;
 
@@ -335,12 +332,7 @@ async fn load_tree(
 
     match tree_result {
         Ok(tree_response) => {
-            let mut items = map_tree_to_items(tree_response, &gh_url);
-            if resolve_lfs {
-                client
-                    .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
-                    .await;
-            }
+            let items = map_tree_to_items(tree_response, &gh_url);
 
             if gh_url.path.is_empty() {
                 Ok((gh_url, items, false))
@@ -354,12 +346,7 @@ async fn load_tree(
             }
         }
         Err(_) => {
-            let mut items = client.fetch_contents(&gh_url.api_url()).await?;
-            if resolve_lfs {
-                client
-                    .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
-                    .await;
-            }
+            let items = client.fetch_contents(&gh_url.api_url()).await?;
             Ok((gh_url, items, true))
         }
     }
