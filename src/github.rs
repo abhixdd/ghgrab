@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use futures::StreamExt;
 use serde::Deserialize;
 use url::Url;
 
@@ -59,6 +60,9 @@ pub struct GitHubUrl {
     pub branch: String,
     pub path: String,
     pub platform: Platform,
+    /// True when the URL points at a single file (`/blob/` on GitHub/GitLab),
+    /// which allows skipping the repository tree lookup entirely.
+    pub is_file_url: bool,
 }
 
 impl GitHubUrl {
@@ -79,7 +83,8 @@ impl GitHubUrl {
 
         let platform = Platform::detect(host, &path_segments);
 
-        let (owner, repo, branch, path) = Self::parse_project_and_ref(&platform, &path_segments);
+        let (owner, repo, branch, path, is_file_url) =
+            Self::parse_project_and_ref(&platform, &path_segments);
 
         Ok(GitHubUrl {
             owner,
@@ -87,13 +92,14 @@ impl GitHubUrl {
             branch,
             path,
             platform,
+            is_file_url,
         })
     }
 
     fn parse_project_and_ref(
         platform: &Platform,
         segments: &[&str],
-    ) -> (String, String, String, String) {
+    ) -> (String, String, String, String, bool) {
         let strip_git = |s: &str| s.trim_end_matches(".git").to_string();
         let branch_and_path =
             |after: &[&str]| -> (String, String) { (after[0].to_string(), after[1..].join("/")) };
@@ -102,15 +108,16 @@ impl GitHubUrl {
             Platform::GitHub => {
                 let owner = segments[0].to_string();
                 let repo = strip_git(segments[1]);
-                let (branch, path) = match &segments[2..] {
+                let (branch, path, is_file_url) = match &segments[2..] {
                     [kind, rest @ ..]
                         if (*kind == "tree" || *kind == "blob") && !rest.is_empty() =>
                     {
-                        branch_and_path(rest)
+                        let (branch, path) = branch_and_path(rest);
+                        (branch, path, *kind == "blob")
                     }
-                    _ => ("main".to_string(), String::new()),
+                    _ => ("main".to_string(), String::new(), false),
                 };
-                (owner, repo, branch, path)
+                (owner, repo, branch, path, is_file_url)
             }
             Platform::Gitea(_) => {
                 let owner = segments[0].to_string();
@@ -119,7 +126,7 @@ impl GitHubUrl {
                     ["src", _, rest @ ..] if !rest.is_empty() => branch_and_path(rest),
                     _ => ("main".to_string(), String::new()),
                 };
-                (owner, repo, branch, path)
+                (owner, repo, branch, path, false)
             }
             Platform::GitLab(_) => {
                 let project_end = segments
@@ -131,15 +138,16 @@ impl GitHubUrl {
                 let owner = segments[..repo_idx].join("/");
                 let repo = strip_git(segments[repo_idx]);
 
-                let (branch, path) = match segments.get(project_end + 1..) {
+                let (branch, path, is_file_url) = match segments.get(project_end + 1..) {
                     Some([kind, rest @ ..])
                         if (*kind == "tree" || *kind == "blob") && !rest.is_empty() =>
                     {
-                        branch_and_path(rest)
+                        let (branch, path) = branch_and_path(rest);
+                        (branch, path, *kind == "blob")
                     }
-                    _ => ("main".to_string(), String::new()),
+                    _ => ("main".to_string(), String::new(), false),
                 };
-                (owner, repo, branch, path)
+                (owner, repo, branch, path, is_file_url)
             }
         }
     }
@@ -174,6 +182,7 @@ impl GitHubUrl {
                 branch: format!("{}/{}", self.branch, branch_suffix),
                 path: remaining_path,
                 platform: self.platform.clone(),
+                is_file_url: self.is_file_url,
             });
         }
 
@@ -978,6 +987,8 @@ impl GitHubClient {
     }
 
     /// Resolve GitHub LFS pointers in a list of items. No-op for non-GitHub platforms.
+    /// Small files are probed concurrently because a sequential probe of every
+    /// candidate dominates the runtime on large repositories.
     pub async fn resolve_lfs_files(
         &self,
         items: &mut [RepoItem],
@@ -988,39 +999,54 @@ impl GitHubClient {
         if !self.platform.is_github() {
             return;
         }
-        for item in items.iter_mut() {
-            if item.is_file() {
-                if let Some(size) = item.size {
-                    if size < 1024 {
-                        if let Some(download_url) = &item.download_url {
-                            if let Ok(content) = self.fetch_raw_content(download_url).await {
-                                if let Some(pointer) = LfsPointer::parse(&content) {
-                                    item.lfs_oid = Some(pointer.oid.clone());
-                                    item.lfs_size = Some(pointer.size);
 
-                                    if let Ok(lfs_url) = self
-                                        .get_lfs_download_url(
-                                            owner,
-                                            repo,
-                                            &pointer.oid,
-                                            pointer.size,
-                                        )
-                                        .await
-                                    {
-                                        item.lfs_download_url = Some(lfs_url);
-                                    } else {
-                                        let media_url = format!(
-                                            "https://media.githubusercontent.com/media/{}/{}/{}/{}",
-                                            owner, repo, branch, item.path
-                                        );
-                                        item.lfs_download_url = Some(media_url);
-                                    }
-                                }
-                            }
-                        }
-                    }
+        let candidates: Vec<(usize, String, String)> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.is_file()
+                    && item.size.is_some_and(|size| size < 1024)
+                    && item.download_url.is_some()
+            })
+            .map(|(index, item)| (index, item.download_url.clone().unwrap(), item.path.clone()))
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+
+        let owner = owner.to_string();
+        let repo = repo.to_string();
+        let branch = branch.to_string();
+
+        let resolved: Vec<Option<(usize, String, u64, String)>> = futures::stream::iter(candidates)
+            .map(|(index, download_url, path)| {
+                let owner = owner.clone();
+                let repo = repo.clone();
+                let branch = branch.clone();
+                async move {
+                    let content = self.fetch_raw_content(&download_url).await.ok()?;
+                    let pointer = LfsPointer::parse(&content)?;
+                    let lfs_url = match self
+                        .get_lfs_download_url(&owner, &repo, &pointer.oid, pointer.size)
+                        .await
+                    {
+                        Ok(url) => url,
+                        Err(_) => format!(
+                            "https://media.githubusercontent.com/media/{}/{}/{}/{}",
+                            owner, repo, branch, path
+                        ),
+                    };
+                    Some((index, pointer.oid, pointer.size, lfs_url))
                 }
-            }
+            })
+            .buffer_unordered(8)
+            .collect()
+            .await;
+
+        for (index, oid, size, lfs_url) in resolved.into_iter().flatten() {
+            items[index].lfs_oid = Some(oid);
+            items[index].lfs_size = Some(size);
+            items[index].lfs_download_url = Some(lfs_url);
         }
     }
 }
@@ -1050,6 +1076,7 @@ mod tests {
         assert_eq!(parsed.repo, "rust");
         assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.path, "");
+        assert!(!parsed.is_file_url);
     }
 
     #[test]
@@ -1060,6 +1087,23 @@ mod tests {
         assert_eq!(parsed.repo, "repo");
         assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.path, "src/lib.rs");
+        assert!(parsed.is_file_url);
+    }
+
+    #[test]
+    fn test_parse_tree_url_is_not_a_file() {
+        let url = "https://github.com/owner/repo/tree/main/src";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.path, "src");
+        assert!(!parsed.is_file_url);
+    }
+
+    #[test]
+    fn test_parse_gitlab_blob_url_is_a_file() {
+        let url = "https://gitlab.com/group/sub/repo/-/blob/main/src/lib.rs";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.path, "src/lib.rs");
+        assert!(parsed.is_file_url);
     }
 
     #[test]
@@ -1212,6 +1256,7 @@ mod tests {
             branch: "main".into(),
             path: "src/lib.rs".into(),
             platform: Platform::GitHub,
+            is_file_url: false,
         };
         assert_eq!(
             gh.api_url(),
@@ -1227,6 +1272,7 @@ mod tests {
             branch: "main".into(),
             path: String::new(),
             platform: Platform::GitHub,
+            is_file_url: false,
         };
         assert_eq!(
             gh.api_url(),
@@ -1242,6 +1288,7 @@ mod tests {
             branch: "main".into(),
             path: "src".into(),
             platform: Platform::Gitea("codeberg.org".to_string()),
+            is_file_url: false,
         };
         assert_eq!(
             gh.api_url(),
@@ -1257,6 +1304,7 @@ mod tests {
             branch: "main".into(),
             path: "src".into(),
             platform: Platform::GitLab("gitlab.com".to_string()),
+            is_file_url: false,
         };
         let url = gh.api_url();
         assert!(url.contains("/api/v4/projects/user%2Frepo/repository/tree"));
@@ -1271,6 +1319,7 @@ mod tests {
             branch: "main".into(),
             path: String::new(),
             platform: Platform::GitHub,
+            is_file_url: false,
         };
         assert_eq!(
             gh.raw_file_url_for_path("src/lib.rs"),
@@ -1286,6 +1335,7 @@ mod tests {
             branch: "main".into(),
             path: String::new(),
             platform: Platform::Gitea("codeberg.org".to_string()),
+            is_file_url: false,
         };
         assert_eq!(
             gh.raw_file_url_for_path("src/lib.rs"),
@@ -1301,6 +1351,7 @@ mod tests {
             branch: "main".into(),
             path: String::new(),
             platform: Platform::GitLab("gitlab.com".to_string()),
+            is_file_url: false,
         };
         assert_eq!(
             gh.raw_file_url_for_path("src/lib.rs"),
