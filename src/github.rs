@@ -59,6 +59,9 @@ pub struct GitHubUrl {
     pub branch: String,
     pub path: String,
     pub platform: Platform,
+    /// True when the URL points at a single file (`/blob/` on GitHub/GitLab),
+    /// which allows skipping the repository tree lookup entirely.
+    pub is_file_url: bool,
 }
 
 impl GitHubUrl {
@@ -79,7 +82,8 @@ impl GitHubUrl {
 
         let platform = Platform::detect(host, &path_segments);
 
-        let (owner, repo, branch, path) = Self::parse_project_and_ref(&platform, &path_segments);
+        let (owner, repo, branch, path, is_file_url) =
+            Self::parse_project_and_ref(&platform, &path_segments);
 
         Ok(GitHubUrl {
             owner,
@@ -87,13 +91,14 @@ impl GitHubUrl {
             branch,
             path,
             platform,
+            is_file_url,
         })
     }
 
     fn parse_project_and_ref(
         platform: &Platform,
         segments: &[&str],
-    ) -> (String, String, String, String) {
+    ) -> (String, String, String, String, bool) {
         let strip_git = |s: &str| s.trim_end_matches(".git").to_string();
         let branch_and_path =
             |after: &[&str]| -> (String, String) { (after[0].to_string(), after[1..].join("/")) };
@@ -102,15 +107,16 @@ impl GitHubUrl {
             Platform::GitHub => {
                 let owner = segments[0].to_string();
                 let repo = strip_git(segments[1]);
-                let (branch, path) = match &segments[2..] {
+                let (branch, path, is_file_url) = match &segments[2..] {
                     [kind, rest @ ..]
                         if (*kind == "tree" || *kind == "blob") && !rest.is_empty() =>
                     {
-                        branch_and_path(rest)
+                        let (branch, path) = branch_and_path(rest);
+                        (branch, path, *kind == "blob")
                     }
-                    _ => ("main".to_string(), String::new()),
+                    _ => ("main".to_string(), String::new(), false),
                 };
-                (owner, repo, branch, path)
+                (owner, repo, branch, path, is_file_url)
             }
             Platform::Gitea(_) => {
                 let owner = segments[0].to_string();
@@ -119,7 +125,7 @@ impl GitHubUrl {
                     ["src", _, rest @ ..] if !rest.is_empty() => branch_and_path(rest),
                     _ => ("main".to_string(), String::new()),
                 };
-                (owner, repo, branch, path)
+                (owner, repo, branch, path, false)
             }
             Platform::GitLab(_) => {
                 let project_end = segments
@@ -131,15 +137,16 @@ impl GitHubUrl {
                 let owner = segments[..repo_idx].join("/");
                 let repo = strip_git(segments[repo_idx]);
 
-                let (branch, path) = match segments.get(project_end + 1..) {
+                let (branch, path, is_file_url) = match segments.get(project_end + 1..) {
                     Some([kind, rest @ ..])
                         if (*kind == "tree" || *kind == "blob") && !rest.is_empty() =>
                     {
-                        branch_and_path(rest)
+                        let (branch, path) = branch_and_path(rest);
+                        (branch, path, *kind == "blob")
                     }
-                    _ => ("main".to_string(), String::new()),
+                    _ => ("main".to_string(), String::new(), false),
                 };
-                (owner, repo, branch, path)
+                (owner, repo, branch, path, is_file_url)
             }
         }
     }
@@ -174,6 +181,7 @@ impl GitHubUrl {
                 branch: format!("{}/{}", self.branch, branch_suffix),
                 path: remaining_path,
                 platform: self.platform.clone(),
+                is_file_url: self.is_file_url,
             });
         }
 
@@ -1050,6 +1058,7 @@ mod tests {
         assert_eq!(parsed.repo, "rust");
         assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.path, "");
+        assert!(!parsed.is_file_url);
     }
 
     #[test]
@@ -1060,6 +1069,23 @@ mod tests {
         assert_eq!(parsed.repo, "repo");
         assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.path, "src/lib.rs");
+        assert!(parsed.is_file_url);
+    }
+
+    #[test]
+    fn test_parse_tree_url_is_not_a_file() {
+        let url = "https://github.com/owner/repo/tree/main/src";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.path, "src");
+        assert!(!parsed.is_file_url);
+    }
+
+    #[test]
+    fn test_parse_gitlab_blob_url_is_a_file() {
+        let url = "https://gitlab.com/group/sub/repo/-/blob/main/src/lib.rs";
+        let parsed = GitHubUrl::parse(url).unwrap();
+        assert_eq!(parsed.path, "src/lib.rs");
+        assert!(parsed.is_file_url);
     }
 
     #[test]
@@ -1212,6 +1238,7 @@ mod tests {
             branch: "main".into(),
             path: "src/lib.rs".into(),
             platform: Platform::GitHub,
+            is_file_url: false,
         };
         assert_eq!(
             gh.api_url(),
@@ -1227,6 +1254,7 @@ mod tests {
             branch: "main".into(),
             path: String::new(),
             platform: Platform::GitHub,
+            is_file_url: false,
         };
         assert_eq!(
             gh.api_url(),
@@ -1242,6 +1270,7 @@ mod tests {
             branch: "main".into(),
             path: "src".into(),
             platform: Platform::Gitea("codeberg.org".to_string()),
+            is_file_url: false,
         };
         assert_eq!(
             gh.api_url(),
@@ -1257,6 +1286,7 @@ mod tests {
             branch: "main".into(),
             path: "src".into(),
             platform: Platform::GitLab("gitlab.com".to_string()),
+            is_file_url: false,
         };
         let url = gh.api_url();
         assert!(url.contains("/api/v4/projects/user%2Frepo/repository/tree"));
@@ -1271,6 +1301,7 @@ mod tests {
             branch: "main".into(),
             path: String::new(),
             platform: Platform::GitHub,
+            is_file_url: false,
         };
         assert_eq!(
             gh.raw_file_url_for_path("src/lib.rs"),
@@ -1286,6 +1317,7 @@ mod tests {
             branch: "main".into(),
             path: String::new(),
             platform: Platform::Gitea("codeberg.org".to_string()),
+            is_file_url: false,
         };
         assert_eq!(
             gh.raw_file_url_for_path("src/lib.rs"),
@@ -1301,6 +1333,7 @@ mod tests {
             branch: "main".into(),
             path: String::new(),
             platform: Platform::GitLab("gitlab.com".to_string()),
+            is_file_url: false,
         };
         assert_eq!(
             gh.raw_file_url_for_path("src/lib.rs"),
