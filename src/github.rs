@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use futures::StreamExt;
 use serde::Deserialize;
 use url::Url;
 
@@ -986,6 +987,8 @@ impl GitHubClient {
     }
 
     /// Resolve GitHub LFS pointers in a list of items. No-op for non-GitHub platforms.
+    /// Small files are probed concurrently because a sequential probe of every
+    /// candidate dominates the runtime on large repositories.
     pub async fn resolve_lfs_files(
         &self,
         items: &mut [RepoItem],
@@ -996,39 +999,54 @@ impl GitHubClient {
         if !self.platform.is_github() {
             return;
         }
-        for item in items.iter_mut() {
-            if item.is_file() {
-                if let Some(size) = item.size {
-                    if size < 1024 {
-                        if let Some(download_url) = &item.download_url {
-                            if let Ok(content) = self.fetch_raw_content(download_url).await {
-                                if let Some(pointer) = LfsPointer::parse(&content) {
-                                    item.lfs_oid = Some(pointer.oid.clone());
-                                    item.lfs_size = Some(pointer.size);
 
-                                    if let Ok(lfs_url) = self
-                                        .get_lfs_download_url(
-                                            owner,
-                                            repo,
-                                            &pointer.oid,
-                                            pointer.size,
-                                        )
-                                        .await
-                                    {
-                                        item.lfs_download_url = Some(lfs_url);
-                                    } else {
-                                        let media_url = format!(
-                                            "https://media.githubusercontent.com/media/{}/{}/{}/{}",
-                                            owner, repo, branch, item.path
-                                        );
-                                        item.lfs_download_url = Some(media_url);
-                                    }
-                                }
-                            }
-                        }
-                    }
+        let candidates: Vec<(usize, String, String)> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.is_file()
+                    && item.size.is_some_and(|size| size < 1024)
+                    && item.download_url.is_some()
+            })
+            .map(|(index, item)| (index, item.download_url.clone().unwrap(), item.path.clone()))
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+
+        let owner = owner.to_string();
+        let repo = repo.to_string();
+        let branch = branch.to_string();
+
+        let resolved: Vec<Option<(usize, String, u64, String)>> = futures::stream::iter(candidates)
+            .map(|(index, download_url, path)| {
+                let owner = owner.clone();
+                let repo = repo.clone();
+                let branch = branch.clone();
+                async move {
+                    let content = self.fetch_raw_content(&download_url).await.ok()?;
+                    let pointer = LfsPointer::parse(&content)?;
+                    let lfs_url = match self
+                        .get_lfs_download_url(&owner, &repo, &pointer.oid, pointer.size)
+                        .await
+                    {
+                        Ok(url) => url,
+                        Err(_) => format!(
+                            "https://media.githubusercontent.com/media/{}/{}/{}/{}",
+                            owner, repo, branch, path
+                        ),
+                    };
+                    Some((index, pointer.oid, pointer.size, lfs_url))
                 }
-            }
+            })
+            .buffer_unordered(8)
+            .collect()
+            .await;
+
+        for (index, oid, size, lfs_url) in resolved.into_iter().flatten() {
+            items[index].lfs_oid = Some(oid);
+            items[index].lfs_size = Some(size);
+            items[index].lfs_download_url = Some(lfs_url);
         }
     }
 }

@@ -1,7 +1,8 @@
 use crate::download::Downloader;
-use crate::github::{Credentials, GitHubClient, GitHubError, GitHubUrl, RepoItem};
-use anyhow::{anyhow, Result};
+use crate::github::{Credentials, GitHubClient, GitHubError, GitHubUrl, LfsPointer, RepoItem};
+use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
+use std::fs;
 use std::path::PathBuf;
 
 pub const AGENT_API_VERSION: &str = "1";
@@ -82,7 +83,7 @@ impl<T> AgentEnvelope<T> {
 pub async fn fetch_tree(url: &str, credentials: &Credentials) -> Result<AgentTreeResponse> {
     let gh_url = GitHubUrl::parse(url)?;
     let client = GitHubClient::new_for_url(credentials, &gh_url)?;
-    let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
+    let (gh_url, entries, truncated) = load_tree(&client, gh_url, true).await?;
 
     Ok(AgentTreeResponse {
         owner: gh_url.owner,
@@ -103,6 +104,67 @@ pub async fn fetch_tree(url: &str, credentials: &Credentials) -> Result<AgentTre
     })
 }
 
+/// Return the path to fetch directly when the URL is a blob URL and the
+/// requested paths do not ask for anything else.
+fn single_file_path(gh_url: &GitHubUrl, selected_paths: &[String]) -> Option<String> {
+    if !gh_url.is_file_url || gh_url.path.is_empty() {
+        return None;
+    }
+
+    let requested: Vec<String> = selected_paths
+        .iter()
+        .map(|path| normalize_requested_path(path))
+        .collect();
+    if requested.is_empty() || (requested.len() == 1 && requested[0] == gh_url.path) {
+        Some(gh_url.path.clone())
+    } else {
+        None
+    }
+}
+
+/// Download a single file directly from its raw URL when the input is a blob
+/// URL and the requested path matches it. This avoids fetching the whole
+/// repository tree, which is prohibitively expensive on very large repos.
+async fn fetch_single_file(
+    client: &GitHubClient,
+    gh_url: &GitHubUrl,
+    selected_paths: &[String],
+) -> Option<(String, Vec<u8>)> {
+    let path = single_file_path(gh_url, selected_paths)?;
+    let raw_url = gh_url.raw_file_url_for_path(&path);
+    let content = client.fetch_bytes(&raw_url).await.ok()?;
+
+    // LFS pointers are tiny text stubs, so resolve them to the real blob.
+    if gh_url.platform.is_github() {
+        if let Ok(text) = std::str::from_utf8(&content) {
+            if let Some(pointer) = LfsPointer::parse(text) {
+                let lfs_url = client
+                    .get_lfs_download_url(&gh_url.owner, &gh_url.repo, &pointer.oid, pointer.size)
+                    .await
+                    .ok()?;
+                let resolved = client.fetch_bytes(&lfs_url).await.ok()?;
+                return Some((path, resolved));
+            }
+        }
+    }
+
+    Some((path, content))
+}
+
+fn resolve_download_dir(
+    repo_name: &str,
+    output_path: Option<String>,
+    cwd: bool,
+    no_folder: bool,
+) -> Result<PathBuf> {
+    let base_dir = resolve_base_dir(output_path, cwd)?;
+    Ok(if no_folder {
+        base_dir
+    } else {
+        base_dir.join(repo_name)
+    })
+}
+
 pub async fn download_paths(
     url: &str,
     credentials: &Credentials,
@@ -114,21 +176,43 @@ pub async fn download_paths(
 ) -> Result<AgentDownloadResponse> {
     let gh_url = GitHubUrl::parse(url)?;
     let client = GitHubClient::new_for_url(credentials, &gh_url)?;
-    let (gh_url, entries, truncated) = load_tree(&client, gh_url).await?;
 
-    let items_to_download = if truncated {
+    if let Some((path, content)) = fetch_single_file(&client, &gh_url, selected_paths).await {
+        let download_dir = resolve_download_dir(&gh_url.repo, output_path, cwd, no_folder)?;
+        fs::create_dir_all(&download_dir)?;
+        let filename = path.rsplit('/').next().unwrap_or(&path);
+        let dest = download_dir.join(filename);
+        fs::write(&dest, content).with_context(|| format!("Failed to write file: {:?}", dest))?;
+
+        return Ok(AgentDownloadResponse {
+            owner: gh_url.owner,
+            repo: gh_url.repo,
+            branch: gh_url.branch,
+            output_dir: download_dir.display().to_string(),
+            downloaded_paths: vec![path],
+            errors: vec![],
+        });
+    }
+
+    // Skip LFS probing for the whole tree: only the files we actually
+    // download need their LFS pointers resolved.
+    let (gh_url, entries, truncated) = load_tree(&client, gh_url, false).await?;
+
+    let mut items_to_download = if truncated {
         resolve_requested_items_with_fallback(&client, &gh_url, &entries, selected_paths).await?
     } else {
         resolve_requested_items(&entries, selected_paths)?
     };
-    let repo_name = gh_url.repo.clone();
+    client
+        .resolve_lfs_files(
+            &mut items_to_download,
+            &gh_url.owner,
+            &gh_url.repo,
+            &gh_url.branch,
+        )
+        .await;
 
-    let base_dir = resolve_base_dir(output_path, cwd)?;
-    let download_dir = if no_folder {
-        base_dir
-    } else {
-        base_dir.join(&repo_name)
-    };
+    let download_dir = resolve_download_dir(&gh_url.repo, output_path, cwd, no_folder)?;
 
     let download_client = GitHubClient::new_for_url(credentials, &gh_url)?;
     let downloader = Downloader::new(download_dir.clone(), download_client, jobs)?;
@@ -217,6 +301,7 @@ pub fn classify_error(error: &anyhow::Error) -> &'static str {
 async fn load_tree(
     client: &GitHubClient,
     mut gh_url: GitHubUrl,
+    resolve_lfs: bool,
 ) -> Result<(GitHubUrl, Vec<RepoItem>, bool)> {
     let mut tree_result = client.fetch_recursive_tree(&gh_url).await;
 
@@ -251,9 +336,11 @@ async fn load_tree(
     match tree_result {
         Ok(tree_response) => {
             let mut items = map_tree_to_items(tree_response, &gh_url);
-            client
-                .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
-                .await;
+            if resolve_lfs {
+                client
+                    .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
+                    .await;
+            }
 
             if gh_url.path.is_empty() {
                 Ok((gh_url, items, false))
@@ -268,9 +355,11 @@ async fn load_tree(
         }
         Err(_) => {
             let mut items = client.fetch_contents(&gh_url.api_url()).await?;
-            client
-                .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
-                .await;
+            if resolve_lfs {
+                client
+                    .resolve_lfs_files(&mut items, &gh_url.owner, &gh_url.repo, &gh_url.branch)
+                    .await;
+            }
             Ok((gh_url, items, true))
         }
     }
@@ -431,6 +520,50 @@ fn map_tree_to_items(tree: crate::github::GitTreeResponse, gh_url: &GitHubUrl) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn blob_url(path: &str) -> GitHubUrl {
+        GitHubUrl {
+            owner: "owner".into(),
+            repo: "repo".into(),
+            branch: "main".into(),
+            path: path.into(),
+            platform: crate::github::Platform::GitHub,
+            is_file_url: true,
+        }
+    }
+
+    #[test]
+    fn blob_url_with_no_explicit_paths_uses_the_url_path() {
+        let url = blob_url("data/book/file.txt");
+        assert_eq!(
+            single_file_path(&url, &[]).as_deref(),
+            Some("data/book/file.txt")
+        );
+    }
+
+    #[test]
+    fn blob_url_with_matching_explicit_path_uses_the_fast_path() {
+        let url = blob_url("data/book/file.txt");
+        let selected = vec![String::from("/data/book/file.txt")];
+        assert_eq!(
+            single_file_path(&url, &selected).as_deref(),
+            Some("data/book/file.txt")
+        );
+    }
+
+    #[test]
+    fn blob_url_with_other_paths_falls_back_to_tree_lookup() {
+        let url = blob_url("data/book/file.txt");
+        let selected = vec![String::from("README.md")];
+        assert_eq!(single_file_path(&url, &selected), None);
+    }
+
+    #[test]
+    fn tree_url_never_uses_the_single_file_fast_path() {
+        let mut url = blob_url("data/book");
+        url.is_file_url = false;
+        assert_eq!(single_file_path(&url, &[]), None);
+    }
 
     fn file(path: &str) -> RepoItem {
         RepoItem {
